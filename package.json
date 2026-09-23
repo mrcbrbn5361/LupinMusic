@@ -14,6 +14,6 @@
     "build:installer": "npm run build:installer --workspace=desktop",
     "build:portable": "npm run build:portable --workspace=desktop"
   },
-  "author": "Miraç Birben",
+  "author": "Miraç Teksaslıoğlu",
   "license": "MIT"
 }

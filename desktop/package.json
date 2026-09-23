@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Lupin Music - Premium Luxury Music Streaming for Windows & macOS",
   "main": "dist/main/main.js",
-  "author": "Miraç Birben",
+  "author": "Miraç Teksaslıoğlu",
   "license": "MIT",
   "engines": {
     "node": ">=18"
