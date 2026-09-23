@@ -4,7 +4,7 @@
   <img src="desktop/assets/icon.png" alt="Lupin Music Logo" width="160" />
   <br />
   <h3>Next-Generation Luxury Desktop Music Streaming Platform</h3>
-  <p>Obsidian Dark & Neon Magenta/Purple Aesthetic • YouTube Music Engine • Discord Rich Presence • Cross-IDE Shared Memory</p>
+  <p>Obsidian Dark & Neon Magenta/Purple Aesthetic • YouTube Music Engine • Discord Rich Presence</p>
 
   [![Version](https://img.shields.io/badge/version-1.0.0-f43f5e.svg?style=for-the-badge)](https://github.com/mrcbrbn5361/LupinMusic/releases)
   [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-8b5cf6.svg?style=for-the-badge)](https://github.com/mrcbrbn5361/LupinMusic/releases)
@@ -19,16 +19,10 @@
 - 🌌 **Luxury Cyber Aesthetic**: Pure Obsidian `#090214`, Electric Magenta `#ec4899`, and Neon Purple `#a855f7` glassmorphism UI.
 - ⚡ **Instant High-Fidelity Audio**: Powered by custom background YouTube Music stream engine with 100ms instant track transitions (`loadVideoById`).
 - 🛡️ **Built-in Ad & Promo Blocker**: Silent network request interceptor blocks mid-roll, audio, and banner ads cleanly.
-- 🎧 **Discord Rich Presence (No Bot Required for Profile)**:
+- 🎧 **Discord Rich Presence (Native Profile Integration)**:
   - Shows *"Listening to Lupin Music"* natively in your personal Discord profile.
   - Live animated scrubber bar (`0:45 / 3:20`), track title, artist, high-res artwork, and Discord guild invite button.
   - Smart rate-limit protection and real-time state diffing.
-- 🤖 **Discord Bot Integration (`lupin.music` / `.lupin`)**:
-  - Discord bot script (`scripts/discord-bot`) creates cyber neon player cards on demand in your server.
-  - Connects locally to desktop app via Port 9863 REST API.
-- 🧠 **SyncytiumMD Cross-IDE Memory**:
-  - Unified single source of truth for **Antigravity** and **OpenCode** developers.
-  - Automatic synchronization across rules, handoffs, and architectural guides.
 - 📦 **Dual Platform Support**:
   - **Windows 11 / 10**: Official NSIS Setup with custom Lupin sidebar branding + Portable single-executable.
   - **macOS**: Apple Silicon (`arm64`) & Intel (`x64`) bundles.
@@ -64,9 +58,6 @@ npm install
 ```bash
 # Start Desktop Application in development mode
 npm run dev
-
-# Run Discord Bot
-npm run bot
 ```
 
 ### Build Packages

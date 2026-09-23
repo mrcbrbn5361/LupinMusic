@@ -4,8 +4,7 @@
   "description": "Lupin Music - Premium Luxury Music Streaming for Windows & macOS",
   "private": true,
   "workspaces": [
-    "desktop",
-    "scripts/discord-bot"
+    "desktop"
   ],
   "scripts": {
     "dev": "npm run dev --workspace=desktop",
@@ -13,10 +12,7 @@
     "build:win": "npm run build:win --workspace=desktop",
     "build:mac": "npm run build:mac --workspace=desktop",
     "build:installer": "npm run build:installer --workspace=desktop",
-    "build:portable": "npm run build:portable --workspace=desktop",
-    "sync": "syncytium sync",
-    "doctor": "syncytium doctor",
-    "bot": "node scripts/discord-bot/index.js"
+    "build:portable": "npm run build:portable --workspace=desktop"
   },
   "author": "Miraç Birben",
   "license": "MIT"
