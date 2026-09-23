@@ -117,21 +117,40 @@ function applyCurrentTrackUI(track: Track) {
   renderQueueList();
 }
 
+let activePlayReqId = 0;
+
 // Playback Logic
 async function playTrack(track: Track, queue?: Track[]) {
-  if (queue) {
+  if (queue && queue.length > 0) {
     currentQueue = [...queue];
     currentIndex = currentQueue.findIndex(t => t.id === track.id);
+    if (currentIndex === -1) {
+      currentQueue.unshift(track);
+      currentIndex = 0;
+    }
+  } else if (currentQueue.length === 0) {
+    currentQueue = [track];
+    currentIndex = 0;
+  } else {
+    const idx = currentQueue.findIndex(t => t.id === track.id);
+    if (idx !== -1) {
+      currentIndex = idx;
+    } else {
+      currentQueue.splice(currentIndex + 1, 0, track);
+      currentIndex += 1;
+    }
   }
 
+  const reqId = ++activePlayReqId;
   applyCurrentTrackUI(track);
 
   // Add to History
-  window.api?.addToHistory(track);
+  window.api?.addToHistory?.(track);
 
   try {
-    playerArtist.textContent = 'Akış bağlanıyor...';
     const ok = await window.api.playTrack(track);
+    if (reqId !== activePlayReqId) return;
+
     playerArtist.textContent = track.artist;
     if (!ok) {
       showToast('⚠️ Şarkı akışı bağlanamadı, tekrar deneyin.');
@@ -142,7 +161,9 @@ async function playTrack(track: Track, queue?: Track[]) {
     updatePlayPauseUI();
   } catch (err) {
     console.error('Play track failed:', err);
-    playerArtist.textContent = track.artist;
+    if (reqId === activePlayReqId) {
+      playerArtist.textContent = track.artist;
+    }
   }
 }
 
@@ -292,19 +313,25 @@ progressBar.addEventListener('click', (e: MouseEvent) => {
 function setVolume(val: number) {
   const v = Math.max(0, Math.min(1, val));
   volumeSlider.value = String(v);
-  window.api?.setVolume(v);
-  window.api?.updateSettings({ volume: v });
+
+  // Dynamic gradient fill for volume slider track
+  const pct = Math.round(v * 100);
+  volumeSlider.style.background = `linear-gradient(to right, var(--accent-pink) 0%, var(--accent-purple) ${pct}%, rgba(255, 255, 255, 0.15) ${pct}%, rgba(255, 255, 255, 0.15) 100%)`;
+
+  window.api?.setVolume?.(v);
+  window.api?.updateSettings?.({ volume: v });
   updateVolumeIcon(v);
 }
 
-function updateVolumeIcon(v: number) {
-  if (v === 0) {
-    volumeIcon.innerHTML = '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" fill="currentColor"/>';
-  } else if (v < 0.5) {
-    volumeIcon.innerHTML = '<path d="M18.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z" fill="currentColor"/>';
-  } else {
-    volumeIcon.innerHTML = '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" fill="currentColor"/>';
-  }
+// Mouse Wheel volume control on .volume-row
+const volumeRow = document.querySelector('.volume-row') as HTMLElement;
+if (volumeRow) {
+  volumeRow.addEventListener('wheel', (e: WheelEvent) => {
+    e.preventDefault();
+    const currentVol = parseFloat(volumeSlider.value);
+    const delta = e.deltaY < 0 ? 0.05 : -0.05;
+    setVolume(currentVol + delta);
+  }, { passive: false });
 }
 
 volumeSlider.addEventListener('input', () => {
@@ -559,52 +586,53 @@ window.api?.onRemoteControl?.((action: string, payload?: any) => {
 
 // Keyboard Shortcuts
 window.addEventListener('keydown', (e: KeyboardEvent) => {
-  if (document.activeElement === searchInput) {
-    if (e.code === 'Escape') {
-      searchInput.blur();
+  const target = e.target as HTMLElement;
+  const isInput = !!(
+    target && (
+      target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.isContentEditable ||
+      target.closest('input, textarea')
+    )
+  );
+
+  if (isInput) {
+    if (e.code === 'Escape' && target instanceof HTMLElement) {
+      target.blur();
     }
     return;
   }
 
-  switch (e.code) {
-    case 'Space':
-      e.preventDefault();
-      togglePlayPause();
-      break;
-    case 'ArrowRight':
-      e.preventDefault();
-      if (currentDuration > 0) {
-        window.api.seek(Math.min(currentDuration, currentTime + 5));
-      }
-      break;
-    case 'ArrowLeft':
-      e.preventDefault();
-      if (currentDuration > 0) {
-        window.api.seek(Math.max(0, currentTime - 5));
-      }
-      break;
-    case 'ArrowUp':
-      e.preventDefault();
-      setVolume(parseFloat(volumeSlider.value) + 0.05);
-      showToast(`🔊 Ses: %${Math.round(parseFloat(volumeSlider.value) * 100)}`);
-      break;
-    case 'ArrowDown':
-      e.preventDefault();
-      setVolume(parseFloat(volumeSlider.value) - 0.05);
-      showToast(`🔉 Ses: %${Math.round(parseFloat(volumeSlider.value) * 100)}`);
-      break;
-    case 'KeyM':
-      btnMute.click();
-      break;
-    case 'KeyN':
-      playNext();
-      break;
-    case 'KeyP':
-      playPrev();
-      break;
-    case 'KeyL':
-      btnLike.click();
-      break;
+  const code = e.code;
+  const key = e.key.toLowerCase();
+
+  if (code === 'Space') {
+    e.preventDefault();
+    togglePlayPause();
+  } else if (code === 'ArrowLeft') {
+    e.preventDefault();
+    if (e.shiftKey) playPrev();
+    else if (currentDuration > 0) window.api?.seek(Math.max(0, currentTime - 5));
+  } else if (code === 'ArrowRight') {
+    e.preventDefault();
+    if (e.shiftKey) playNext();
+    else if (currentDuration > 0) window.api?.seek(Math.min(currentDuration, currentTime + 5));
+  } else if (code === 'ArrowUp') {
+    e.preventDefault();
+    setVolume(parseFloat(volumeSlider.value) + 0.05);
+    showToast(`🔊 Ses: %${Math.round(parseFloat(volumeSlider.value) * 100)}`);
+  } else if (code === 'ArrowDown') {
+    e.preventDefault();
+    setVolume(parseFloat(volumeSlider.value) - 0.05);
+    showToast(`🔉 Ses: %${Math.round(parseFloat(volumeSlider.value) * 100)}`);
+  } else if (code === 'KeyM' || key === 'm') {
+    btnMute.click();
+  } else if (code === 'KeyN' || key === 'n') {
+    playNext();
+  } else if (code === 'KeyP' || key === 'p') {
+    playPrev();
+  } else if (code === 'KeyL' || key === 'l') {
+    btnLike.click();
   }
 });
 

@@ -667,6 +667,13 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.volume-row:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .volume-btn {
@@ -683,27 +690,32 @@ body {
 
 .volume-slider {
   -webkit-appearance: none;
-  width: 85px;
-  height: 4px;
-  background: rgba(255, 255, 255, 0.15);
+  width: 90px;
+  height: 5px;
+  background: linear-gradient(to right, var(--accent-pink) 0%, var(--accent-purple) 80%, rgba(255, 255, 255, 0.15) 80%, rgba(255, 255, 255, 0.15) 100%);
   border-radius: 999px;
   outline: none;
   cursor: pointer;
+  transition: background 0.1s ease, height 0.2s ease;
+}
+
+.volume-slider:hover {
+  height: 7px;
 }
 
 .volume-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background: var(--accent-purple);
-  box-shadow: 0 0 6px var(--accent-purple);
+  background: #ffffff;
+  box-shadow: 0 0 8px var(--accent-purple), 0 0 12px var(--accent-pink);
   cursor: pointer;
   transition: transform 0.2s;
 }
 
 .volume-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.3);
+  transform: scale(1.35);
 }
 
 /* Queue Drawer (Sliding Panel) */

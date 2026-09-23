@@ -463,49 +463,29 @@ export class AudioEngine {
         try {
           await win.loadURL(`${WATCH_URL}${encodeURIComponent(videoId)}`);
         } catch (e: any) {
-          // Sayfa yüklenirken yeni bir istek geldiyse yoksay
-          if (gen !== this.playGen) return false;
+          if (gen !== this.playGen) return true;
         }
       }
 
-      if (gen !== this.playGen || win.isDestroyed()) return false;
+      if (gen !== this.playGen || win.isDestroyed()) return true;
 
       // Betikleri enjekte et ve sesi uygula
       await win.webContents.executeJavaScript(ADBLOCK_INJECTION_JS, true).catch(() => {});
       await this.setVolume(this.volume);
 
-      // Polling başlat
+      // Sesi aç ve oynatmayı kesin olarak başlat
+      await win.webContents.executeJavaScript(`(() => {
+        try {
+          const mp = document.getElementById('movie_player') || window.__hmp;
+          if (mp && typeof mp.playVideo === 'function') mp.playVideo();
+          for (const v of document.querySelectorAll('video, audio')) {
+            if (v.paused) v.play().catch(() => {});
+          }
+        } catch {}
+      })()`, true).catch(() => {});
+
+      // Polling başlat ve ilk durumu hızlıca bildir
       this.startPolling();
-
-      // Playback'in kesin olarak başladığını doğrula (autoplay bazen ikinci bir tetikleme gerektirir)
-      for (let i = 0; i < 5; i++) {
-        await new Promise((r) => setTimeout(r, 600));
-        if (this.currentVideoId !== videoId || gen !== this.playGen || win.isDestroyed()) return false;
-
-        const isPlaying = await win.webContents.executeJavaScript(`(() => {
-          try {
-            const mp = document.getElementById('movie_player')
-              || document.querySelector('ytmusic-player-bar')?.querySelector('#movie_player')
-              || window.__hmp;
-            if (mp && typeof mp.getPlayerState === 'function') {
-              const state = mp.getPlayerState();
-              if (state === 1) return true;
-              if (typeof mp.playVideo === 'function') mp.playVideo();
-            } else {
-              const v = document.querySelector('video');
-              if (v) {
-                if (!v.paused) return true;
-                v.play().catch(() => {});
-              }
-            }
-          } catch {}
-          return false;
-        })()`, true).catch(() => false);
-
-        if (isPlaying) break;
-      }
-
-      // İlk durumu hemen bildir
       await this.pollOnce();
       return true;
     } catch (err) {
