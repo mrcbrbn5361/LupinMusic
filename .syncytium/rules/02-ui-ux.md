@@ -1,0 +1,25 @@
+---
+title: "Lupin Arayüz ve Görsel Tasarım Kılavuzu (Anti-AI-Slop)"
+description: "Neon pembe/mor lüks renk paleti, tipografi, cam efektleri ve tasarım kuralları"
+tags: ["ui", "design", "anti-ai-slop", "styling"]
+---
+
+# Lupin Arayüz ve Görsel Tasarım Kılavuzu
+
+1. **Anti-AI-Slop Prensibi:**
+   - Asla varsayılan yeşil Spotify kopyası veya kalitesiz, yapay yapay zeka şablonları kullanılmaz.
+   - Her buton, kart ve animasyon lüks, akıcı ve el işçiliği hissi vermelidir.
+
+2. **Renk Paleti (Lupin Metalik & Neon):**
+   - **Arka Plan (Derin Obsidian Moru):** `#090214`, ikincil kartlar `#130626`, yüzey `#1b0a33`
+   - **Vurgular (Elektrik Macenta & Pembe):** `#ec4899`, `#f43f5e`, `#d946ef`
+   - **İkincil Parıltı (Neon Mor / Violet):** `#8b5cf6`, `#a855f7`, `#7c3aed`
+   - **Metin:** Başlıklar `#ffffff`, gövde `#d8b4fe`, silik `#9333ea`
+
+3. **Görsel Efektler & Cam (Glassmorphism):**
+   - `backdrop-filter: blur(20px)` ve ince `border: 1px solid rgba(236, 72, 153, 0.18)`
+   - Hover durumlarında yumuşak neon gölgeler: `box-shadow: 0 0 24px rgba(168, 85, 247, 0.35)`
+   - Dinamik 3 barlı canlı pembe-mor ekolayzır.
+
+4. **Marka ve İkon:**
+   - Sağlanan mor Lupin metalik mührü uygulamanın sol üstünde, pencere simgesinde ve Discord kartında merkez logo olarak yer alır.

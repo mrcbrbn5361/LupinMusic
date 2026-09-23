@@ -1,0 +1,12 @@
+node_modules/
+*/node_modules/
+dist/
+desktop/dist/
+release/
+desktop/release/
+.env
+scripts/discord-bot/.env
+*.log
+.DS_Store
+Thumbs.db
+

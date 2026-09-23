@@ -1,0 +1,121 @@
+{
+  "name": "lupin-music-desktop",
+  "version": "1.0.0",
+  "description": "Lupin Music - Premium Luxury Music Streaming for Windows & macOS",
+  "main": "dist/main/main.js",
+  "author": "Miraç Birben",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "concurrently \"npm run dev:main\" \"npm run dev:renderer\"",
+    "dev:main": "tsc -p tsconfig.main.json && electron .",
+    "dev:renderer": "vite",
+    "build": "npm run build:main && npm run build:renderer",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build",
+    "build:installer": "npm run build && electron-builder --win nsis --publish never",
+    "build:win": "npm run build && electron-builder --win --publish never",
+    "build:portable": "npm run build && electron-builder --win portable --publish never",
+    "build:mac": "npm run build && electron-builder --mac --publish never",
+    "typecheck": "tsc --noEmit -p tsconfig.main.json"
+  },
+  "dependencies": {
+    "discord-rpc": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "concurrently": "^8.2.2",
+    "electron": "28.3.3",
+    "electron-builder": "^24.9.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12"
+  },
+  "build": {
+    "npmRebuild": false,
+    "appId": "com.lupin.music",
+    "productName": "Lupin Music",
+    "copyright": "Copyright © 2026 Lupin Music",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/",
+        "to": "assets/",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Lupin Music",
+      "artifactName": "Lupin-Music-Setup-${version}-win11.${ext}",
+      "installerSidebar": "assets/installerSidebar.bmp",
+      "uninstallerSidebar": "assets/uninstallerSidebar.bmp",
+      "installerHeader": "assets/installerHeader.bmp",
+      "installerHeaderIcon": "assets/icon.ico",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    },
+    "portable": {
+      "artifactName": "Lupin-Music-Portable-${version}-win11.${ext}",
+      "requestExecutionLevel": "user"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "category": "public.app-category.music",
+      "artifactName": "Lupin-Music-${version}-mac-${arch}.${ext}",
+      "identity": null,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "artifactName": "Lupin-Music-${version}-mac-${arch}.${ext}",
+      "title": "Lupin Music"
+    }
+  }
+}

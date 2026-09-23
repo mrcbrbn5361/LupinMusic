@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleusercontent.com https://i.ytimg.com https://*.ytimg.com https://*.ggpht.com; media-src 'self' blob: data: https://*.googlevideo.com https://*.youtube.com; connect-src 'self' https://music.youtube.com https://www.youtube.com https://*.googlevideo.com;">
+  <title>Lupin Music</title>
+  <link rel="stylesheet" href="./styles/theme.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Titlebar Drag Area -->
+    <header class="titlebar" id="titlebar">
+      <div class="titlebar-brand">
+        <img src="./logo.png" alt="Lupin Emblem" onerror="this.src='./icon.png'" />
+        <span>LUPIN MUSIC</span>
+      </div>
+      <div class="titlebar-controls" id="winControls">
+        <button class="win-btn" id="btnMin" title="Küçült">
+          <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+        </button>
+        <button class="win-btn" id="btnMax" title="Ekranı Kapla / Geri Yükle">
+          <svg width="10" height="10" viewBox="0 0 10 10"><rect width="9" height="9" x="0.5" y="0.5" fill="none" stroke="currentColor"/></svg>
+        </button>
+        <button class="win-btn close" id="btnClose" title="Kapat">
+          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Wrapper -->
+    <div class="main-wrapper">
+      <!-- Sidebar Navigation -->
+      <aside class="sidebar">
+        <div class="brand-hero">
+          <img src="./logo.png" alt="Lupin Music" class="brand-hero-logo" onerror="this.src='./icon.png'" />
+          <div class="brand-hero-text">
+            <h1>LUPIN</h1>
+            <p>PREMIUM MUSIC</p>
+          </div>
+        </div>
+
+        <nav class="nav-menu">
+          <div class="nav-item active" data-view="explore">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/></svg>
+            <span>Keşfet</span>
+          </div>
+          <div class="nav-item" data-view="search">
+            <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <span>Arama</span>
+          </div>
+          <div class="nav-item" data-view="liked">
+            <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+            <span>Beğenilenler</span>
+          </div>
+          <div class="nav-item" data-view="history">
+            <svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+            <span>Geçmiş</span>
+          </div>
+          <div class="nav-item" data-view="settings" id="btnOpenSettings">
+            <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            <span>Ayarlar</span>
+          </div>
+        </nav>
+
+        <!-- System Status Box -->
+        <div class="system-status-box">
+          <div class="status-badge">
+            <span class="status-dot"></span>
+            <span>REST API: <b>Port 9863</b></span>
+          </div>
+          <div class="status-badge">
+            <span class="status-dot"></span>
+            <span>Discord: <b>lupin.music</b></span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center Workspace -->
+      <main class="content-area">
+        <div class="content-header">
+          <div class="search-box">
+            <svg class="search-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <input type="text" id="searchInput" class="search-input" placeholder="Şarkı, sanatçı veya albüm ara... (Boşluk tuşu: Oynat/Duraklat)" />
+          </div>
+        </div>
+
+        <div class="view-container" id="viewContainer">
+          <h2 class="view-section-title" id="viewTitle">🔥 Keşfet — Popüler Parçalar</h2>
+          <div class="cards-grid" id="cardsGrid">
+            <!-- Dynamic music cards inserted via JS -->
+          </div>
+        </div>
+      </main>
+
+      <!-- Queue Drawer (Slide-out) -->
+      <aside class="queue-drawer" id="queueDrawer">
+        <div class="queue-header">
+          <h3>🎵 Çalma Sırası</h3>
+          <button class="win-btn close" id="btnCloseQueue">&times;</button>
+        </div>
+        <div class="queue-list" id="queueList">
+          <!-- Queue items rendered via JS -->
+        </div>
+      </aside>
+    </div>
+
+    <!-- Bottom Player Bar -->
+    <footer class="player-bar">
+      <!-- Left Track Info -->
+      <div class="player-left">
+        <div class="player-thumb-wrap">
+          <img src="./logo.png" alt="Track Art" id="playerThumb" class="player-thumb" onerror="this.src='./logo.png'" />
+        </div>
+        <div class="player-track-info">
+          <div class="player-track-title" id="playerTitle">Lupin Music</div>
+          <div class="player-track-artist" id="playerArtist">Bir şarkı seçin ve çalmaya başlayın</div>
+        </div>
+        <button class="like-btn" id="btnLike" title="Beğen (L Tuşu)">
+          <svg width="20" height="20" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="currentColor"/></svg>
+        </button>
+      </div>
+
+      <!-- Center Playback Controls -->
+      <div class="player-center">
+        <div class="controls-row">
+          <button class="ctrl-btn" id="btnShuffle" title="Karıştır">
+            <svg width="18" height="18" viewBox="0 0 24 24"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" fill="currentColor"/></svg>
+          </button>
+          <button class="ctrl-btn" id="btnPrev" title="Önceki (P Tuşu)">
+            <svg width="22" height="22" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" fill="currentColor"/></svg>
+          </button>
+          <button class="play-pause-btn" id="btnPlayPause" title="Oynat/Duraklat (Boşluk Tuşu)">
+            <svg id="playIcon" width="22" height="22" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+            <svg id="pauseIcon" width="22" height="22" viewBox="0 0 24 24" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/></svg>
+          </button>
+          <button class="ctrl-btn" id="btnNext" title="Sonraki (N Tuşu)">
+            <svg width="22" height="22" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" fill="currentColor"/></svg>
+          </button>
+          <button class="ctrl-btn" id="btnRepeat" title="Tekrar Modu">
+            <svg width="18" height="18" viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" fill="currentColor"/></svg>
+          </button>
+        </div>
+
+        <div class="progress-row">
+          <span class="time-label" id="currentTimeLabel">0:00</span>
+          <div class="progress-bar-wrap" id="progressBar">
+            <div class="progress-fill" id="progressFill">
+              <span class="progress-handle"></span>
+            </div>
+          </div>
+          <span class="time-label" id="durationLabel">0:00</span>
+        </div>
+      </div>
+
+      <!-- Right Extras & Volume -->
+      <div class="player-right">
+        <!-- Live Neon Equalizer -->
+        <div class="equalizer" id="equalizer" title="Canlı Ses Ekolayzırı">
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+        </div>
+
+        <!-- Queue Drawer Toggle Button -->
+        <button class="ctrl-btn" id="btnToggleQueue" title="Çalma Sırası">
+          <svg width="20" height="20" viewBox="0 0 24 24"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z" fill="currentColor"/></svg>
+        </button>
+
+        <!-- Volume -->
+        <div class="volume-row">
+          <button class="volume-btn" id="btnMute" title="Sessize Al (M Tuşu)">
+            <svg id="volumeIcon" width="18" height="18" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" fill="currentColor"/></svg>
+          </button>
+          <input type="range" min="0" max="1" step="0.01" value="0.8" class="volume-slider" id="volumeSlider" />
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">⚙️ Lupin Music Ayarları</h3>
+        <button class="modal-close-btn" id="btnCloseSettings">&times;</button>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <h4>Discord Rich Presence (RPC)</h4>
+          <p>Çalan şarkıyı Discord profilinde ve durumunda göster</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="settingDiscordRpc" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="setting-row" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+        <div class="setting-info" style="width: 100%;">
+          <h4>Discord Uygulama ID (Client ID)</h4>
+          <p>Profilinde görünecek uygulama başlığı için ID (Varsayılan: 1552301617938825216)</p>
+        </div>
+        <div style="display: flex; gap: 8px; width: 100%;">
+          <input type="text" id="settingDiscordAppId" placeholder="Örn: 1552301617938825216" style="flex: 1; background: rgba(255,255,255,0.06); border: 1px solid var(--border-glass); border-radius: 8px; padding: 8px 12px; color: var(--text-primary); font-size: 13px; font-family: inherit; outline: none;" />
+          <button id="btnSaveDiscordAppId" class="ctrl-btn" style="background: var(--gradient-neon); color: #fff; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; width: auto; height: 36px; border: none; cursor: pointer;">Kaydet</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <h4>Yerel Bot Sunucusu (Port 9863)</h4>
+          <p>Discord botlarının `lupin.music` ile durumu okumasını sağlar</p>
+        </div>
+        <span style="color:#10b981; font-size:12px; font-weight:700;">🟢 Aktif (9863)</span>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <h4>Kısayollar</h4>
+          <p>Boşluk: Oynat/Duraklat • N: Sonraki • P: Önceki • M: Sessiz • L: Beğen</p>
+        </div>
+        <span style="color:var(--text-muted); font-size:11px;">Aktif</span>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <h4>Sürüm ve Telif</h4>
+          <p>Lupin Music v1.0.0 — Luxury Edition</p>
+        </div>
+        <span style="color:var(--text-muted); font-size:12px;">© 2026 Miraç Birben</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden Native Audio Engine -->
+  <audio id="audioEngine" preload="auto"></audio>
+
+  <script type="module" src="./app.ts"></script>
+</body>
+</html>
