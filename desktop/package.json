@@ -5,6 +5,15 @@
   "main": "dist/main/main.js",
   "author": "Miraç Teksaslıoğlu",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mrcbrbn5361/LupinMusic.git"
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "mrcbrbn5361",
+    "repo": "LupinMusic"
+  },
   "engines": {
     "node": ">=18"
   },

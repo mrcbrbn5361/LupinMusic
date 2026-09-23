@@ -15,5 +15,9 @@
     "build:portable": "npm run build:portable --workspace=desktop"
   },
   "author": "Miraç Teksaslıoğlu",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mrcbrbn5361/LupinMusic.git"
+  }
 }
