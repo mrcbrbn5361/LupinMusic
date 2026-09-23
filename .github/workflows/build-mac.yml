@@ -40,5 +40,4 @@ jobs:
         with:
           name: Lupin-Music-macOS
           path: |
-            desktop/release/*.dmg
             desktop/release/*.zip
