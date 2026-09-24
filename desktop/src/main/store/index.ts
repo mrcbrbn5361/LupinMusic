@@ -40,7 +40,13 @@ export class AppStore {
     try {
       if (fs.existsSync(this.filePath)) {
         const raw = fs.readFileSync(this.filePath, 'utf-8');
-        return { ...defaultData, ...JSON.parse(raw) };
+        const parsed = JSON.parse(raw);
+        // settings'i derin birlestir: eski kayitlar yeni anahtarlari kaybetmesin
+        return {
+          ...defaultData,
+          ...parsed,
+          settings: { ...defaultData.settings, ...(parsed.settings || {}) }
+        };
       }
     } catch (e) {
       console.warn('[AppStore] Failed to load store, using defaults:', e);

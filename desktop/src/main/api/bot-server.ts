@@ -18,6 +18,7 @@ export class BotServer {
   };
 
   private onControlCallback?: (action: string, payload?: any) => void;
+  private retriedPort: boolean = false;
 
   constructor(port: number = 9863) {
     this.port = port;
@@ -140,7 +141,12 @@ export class BotServer {
           req.on('end', () => {
             try {
               const parsed = JSON.parse(body);
-              if (this.onControlCallback && parsed.action) {
+              if (typeof parsed.action !== 'string' || !parsed.action) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing action' }));
+                return;
+              }
+              if (this.onControlCallback) {
                 this.onControlCallback(parsed.action, parsed.payload);
               }
               res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -158,11 +164,14 @@ export class BotServer {
       });
 
       this.server.on('error', (err: any) => {
-        if (err.code === 'EADDRINUSE') {
-          console.warn(`[BotServer] Port ${this.port} in use, retrying in 3s...`);
+        if (err.code === 'EADDRINUSE' && !this.retriedPort) {
+          this.retriedPort = true;
+          console.warn(`[BotServer] Port ${this.port} in use, retrying once in 3s...`);
           setTimeout(() => {
             if (!this.isRunning) this.start();
           }, 3000);
+        } else if (err.code === 'EADDRINUSE') {
+          console.warn(`[BotServer] Port ${this.port} still in use, giving up (single retry done).`);
         } else {
           console.error('[BotServer] Server error:', err);
         }

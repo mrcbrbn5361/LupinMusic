@@ -162,11 +162,12 @@ const ADBLOCK_INJECTION_JS = `(() => {
     };
 
     // 4. Periyodik denetim ve yetkisiz duraklatmayı otomatik devam ettirme (Keep-alive)
+    // Hizli-ses koprusu aktifken (fast_hold) YT videosuna dokunma: cift ses olmasin
     setInterval(() => {
       dismissDialogs();
       skipAds();
       try {
-        if (window.__lupin_should_play) {
+        if (window.__lupin_should_play && !window.__lupin_fast_hold) {
           const mp = document.getElementById('movie_player') || window.__hmp;
           const v = document.querySelector('video');
           if (v && v.paused && !v.ended) {
@@ -204,6 +205,18 @@ const DISABLE_AUTOPLAY_JS = `(() => {
     }
   } catch {}
 })();`;
+
+// Hizli baslatma: dogrudan ses akisi durum sorgusu (fast-path <audio> elementi)
+const FAST_POLL_JS = `(() => {
+  try {
+    const a = window.__lupin_fast;
+    if (!a) return { ok: false };
+    if (a.error) return { ok: false, error: true };
+    return { ok: true, cur: a.currentTime || 0, dur: a.duration || 0, paused: !!a.paused, ended: !!a.ended };
+  } catch (e) {
+    return { ok: false };
+  }
+})()`;
 
 // Shadow DOM derin taramasıyla movie_player ve video elementlerini bulup durum döndürür
 const RESOLVE_MEDIA_JS = `(() => {
@@ -256,16 +269,18 @@ const RESOLVE_MEDIA_JS = `(() => {
       try { dur = mp.getDuration ? mp.getDuration() : 0; } catch {}
       try { pstate = mp.getPlayerState ? mp.getPlayerState() : -1; } catch {}
 
-      // Video ID: Check URL first (autoplay updates URL immediately), fallback to getVideoData
+      // Video ID: getVideoData birincil kaynaktir. URL ?v parametresi yalnizca
+      // tam sayfa yuklemesinde guncellenir; warm loadVideoById gecislerinde eski
+      // sarkida takili kalir, o yuzden fallback'tir.
       let urlVid = '';
       try { urlVid = new URLSearchParams(window.location.search).get('v') || ''; } catch {}
       const apiVid = (vd && vd.video_id) || '';
-      const vid = urlVid || apiVid;
+      const vid = apiVid || urlVid;
 
-      // Extract Title and Artist
+      // Extract Title and Artist (vid apiVid tabanli oldugu icin vd verisi tazedir)
       let title = '';
       let artist = '';
-      const apiDataFresh = !urlVid || !apiVid || urlVid === apiVid;
+      const apiDataFresh = !!vd;
       if (apiDataFresh && vd) {
         title = vd.title || '';
         artist = vd.author || '';
@@ -392,6 +407,22 @@ export class AudioEngine {
   private adStreak: number = 0;
   private adStreakKey: string = '';
   private adSeeks: number = 0;
+  // YT id adopt disiplini: tek poll'daki farkli id hemen benimsenmez
+  private idCandidate: string = '';
+  private idStreak: number = 0;
+  private lastPlayAt: number = 0;
+  // Hizli baslatma (fast-path): YT oynatici hazir olana kadar dogrudan akisla cal
+  private fastAudio: boolean = false;
+  private fastMeta: { title?: string; artist?: string; thumbnail?: string; duration?: number } = {};
+  private streamProvider?: (videoId: string) => Promise<string | null>;
+  private streamCache = new Map<string, { url: string; at: number }>();
+  private fastPending: { gen: number; url: string } | null = null;
+  private static STREAM_TTL_MS = 45 * 60 * 1000;
+
+  /** Dogrudan ses URL saglayici (main tarafindan InnerTube ile baglanir). */
+  public setStreamProvider(provider: (videoId: string) => Promise<string | null>): void {
+    this.streamProvider = provider;
+  }
 
   constructor() {
     this.setupSession();
@@ -410,6 +441,186 @@ export class AudioEngine {
 
   public isAdblockEnabled(): boolean {
     return this.adblockEnabled;
+  }
+
+  /** Hizli elementi durdur ve kaldir (yeni parca / handoff / hata durumlari). */
+  private async stopFastElement(): Promise<void> {
+    this.fastAudio = false;
+    if (!this.win || this.win.isDestroyed()) return;
+    try {
+      await this.win.webContents.executeJavaScript(`(() => {
+        try {
+          const a = window.__lupin_fast;
+          if (a) { try { a.pause(); } catch {} try { a.removeAttribute('src'); } catch {} try { a.load(); } catch {} }
+        } catch {}
+      })()`, true).catch(() => {});
+    } catch {}
+  }
+
+  /** Hizli-ses hold'unu birak; istenirse YT videosunu sesli devam ettir. */
+  private async clearFastHold(resumeYt: boolean): Promise<void> {
+    if (!this.win || this.win.isDestroyed()) return;
+    try {
+      await this.win.webContents.executeJavaScript(`(() => {
+        try {
+          window.__lupin_fast_hold = false;
+          ${resumeYt ? `
+          const mp = document.getElementById('movie_player') || window.__hmp;
+          if (mp && typeof mp.playVideo === 'function') mp.playVideo();
+          const v = document.querySelector('video');
+          if (v) { v.muted = false; v.play().catch(() => {}); }` : ''}
+        } catch {}
+      })()`, true).catch(() => {});
+    } catch {}
+  }
+
+  /**
+   * Hizli baslatma 1. asama: hold + akis URL fetch (navigasyonla paralel kosabilir).
+   * Element kurulumu navigasyon sonrasina birakilir (attachFastElement).
+   * Bayat gen'ler sessizce cekilir; yeni holder'in durumuna DOKUNULMAZ.
+   */
+  private async startFastPath(videoId: string, gen: number): Promise<void> {
+    try {
+      if (!this.streamProvider || !this.win || this.win.isDestroyed()) return;
+      await this.win.webContents.executeJavaScript(
+        'window.__lupin_fast_hold = true;', true
+      ).catch(() => {});
+
+      const now = Date.now();
+      const cached = this.streamCache.get(videoId);
+      let url = (cached && now - cached.at < AudioEngine.STREAM_TTL_MS) ? cached.url : '';
+      if (!url) {
+        url = (await this.streamProvider(videoId).catch(() => null)) || '';
+        if (url) this.streamCache.set(videoId, { url, at: now });
+      }
+      if (gen !== this.playGen) return;
+      if (!url) {
+        await this.stopFastElement();
+        await this.clearFastHold(true);
+        return;
+      }
+      this.fastPending = { gen, url };
+      await this.attachFastElement();
+    } catch {
+      if (gen !== this.playGen) return;
+      await this.stopFastElement().catch(() => {});
+      await this.clearFastHold(true).catch(() => {});
+    }
+  }
+
+  /**
+   * Hizli baslatma 2. asama: <audio> elementini MEVCUT sayfada kurar.
+   * Navigasyon oncesi eski sayfada cagrilirsa ise yaramaz; play() soguk yolda
+   * loadURL sonrasi tekrar denenir. Gen disi cagrilar no-op'tur.
+   */
+  private async attachFastElement(): Promise<boolean> {
+    const p = this.fastPending;
+    if (!p || p.gen !== this.playGen || !this.win || this.win.isDestroyed()) return false;
+
+    const started: boolean = await this.win.webContents.executeJavaScript(`(() => {
+      try {
+        let a = window.__lupin_fast;
+        if (!a || !a.isConnected) {
+          a = new Audio();
+          a.id = '__lupin_fast';
+          a.preload = 'auto';
+          document.documentElement.appendChild(a);
+        }
+        a.volume = ${this.volume};
+        const target = ${JSON.stringify(p.url)};
+        if (a.getAttribute('src') !== target) a.src = target;
+        // YT standby: sayfa videolari sessiz + duraklatilmis bekler (cift ses yok)
+        for (const v of document.querySelectorAll('video')) {
+          try { v.muted = true; v.pause(); } catch {}
+        }
+        if (${this.shouldPlay ? 'true' : 'false'}) {
+          a.play().catch(() => {});
+        } else {
+          a.pause();
+        }
+        return true;
+      } catch (e) {
+        return false;
+      }
+    })()`, true).catch(() => false);
+
+    if (p.gen !== this.playGen) return false;
+    if (started !== true) {
+      this.fastPending = null;
+      await this.stopFastElement();
+      await this.clearFastHold(true);
+      return false;
+    }
+    this.fastPending = null;
+    this.fastAudio = true;
+    this.startPolling();
+    this.pollOnce().catch(() => {});
+    return true;
+  }
+
+  /** Hizli mod poll: durumu <audio>'dan uret; YT hazirsa konuma devam ederek devret. */
+  private async pollFast(): Promise<'fast' | 'settle'> {
+    const gen = this.playGen;
+    const vid = this.currentVideoId;
+    const win = this.win;
+    if (!win || win.isDestroyed()) {
+      this.fastAudio = false;
+      return 'settle';
+    }
+    const f: any = await win.webContents.executeJavaScript(FAST_POLL_JS, true).catch(() => null);
+    // Araya yeni parca girdiyse bu koprunun hukum kalmadi: yeni holder'a dokunma
+    if (gen !== this.playGen || vid !== this.currentVideoId) return 'settle';
+    if (!f || !f.ok || f.error) {
+      // Akis oldu: YT'ye don (akisi cache'den dusur)
+      this.streamCache.delete(this.currentVideoId);
+      await this.stopFastElement();
+      await this.clearFastHold(true);
+      return 'settle';
+    }
+    // YT ayni videoyu suresiyle hazir ettiyse devral
+    const yt: any = await win.webContents.executeJavaScript(RESOLVE_MEDIA_JS, true).catch(() => null);
+    if (gen !== this.playGen || vid !== this.currentVideoId) return 'settle';
+    if (yt && yt.ok && yt.videoId === this.currentVideoId && Number(yt.duration) > 0) {
+      const pos = Math.max(0, Number(f.cur) || 0);
+      await this.settleFastPath(pos);
+      return 'settle';
+    }
+    const ended = !!f.ended;
+    this.updateCallback?.({
+      currentTime: Number(f.cur) || 0,
+      duration: Number(f.dur) || this.fastMeta.duration || 0,
+      paused: !this.shouldPlay || !!f.paused,
+      playerState: ended ? 0 : (f.paused ? 2 : 1),
+      videoId: this.currentVideoId,
+      title: this.fastMeta.title || undefined,
+      artist: this.fastMeta.artist || undefined,
+      thumbnail: this.fastMeta.thumbnail || undefined,
+      isAd: false
+    });
+    return 'fast';
+  }
+
+  /** Hizli moddan YT oynaticiya gecis (konum korunur). */
+  private async settleFastPath(posSeconds: number): Promise<void> {
+    await this.stopFastElement();
+    if (!this.win || this.win.isDestroyed()) return;
+    try {
+      await this.win.webContents.executeJavaScript(`(() => {
+        try {
+          window.__lupin_fast_hold = false;
+          const s = ${Number(posSeconds) || 0};
+          const mp = document.getElementById('movie_player') || window.__hmp;
+          if (mp && typeof mp.seekTo === 'function' && typeof mp.getDuration === 'function') {
+            const d = mp.getDuration();
+            if (d > 0) mp.seekTo(Math.min(s, Math.max(0, d - 0.5)), true);
+          }
+          if (mp && typeof mp.playVideo === 'function') mp.playVideo();
+          const v = document.querySelector('video');
+          if (v) { v.playbackRate = 1; v.muted = false; v.play().catch(() => {}); }
+        } catch {}
+      })()`, true).catch(() => {});
+      await this.setVolume(this.volume);
+    } catch {}
   }
 
   private setupSession(): void {
@@ -542,11 +753,25 @@ export class AudioEngine {
     this.updateCallback = cb;
   }
 
-  public async play(videoId: string): Promise<boolean> {
+  public async play(videoId: string, meta?: { title?: string; artist?: string; thumbnail?: string; duration?: number }): Promise<boolean> {
     if (!videoId || this.isDestroyed) return false;
     const gen = ++this.playGen;
     this.currentVideoId = videoId;
     this.shouldPlay = true;
+    this.fastMeta = {
+      title: meta?.title || 'Lupin Music',
+      artist: meta?.artist || 'Lupin Audio',
+      thumbnail: meta?.thumbnail || '',
+      duration: meta?.duration || 0
+    };
+    // Onceki hizli-ses varsa durdur (sicak geciste cift ses olmasin)
+    this.fastAudio = false;
+    this.fastPending = null;
+    this.stopFastElement().catch(() => {});
+    this.clearFastHold(false).catch(() => {});
+    this.idCandidate = '';
+    this.idStreak = 0;
+    this.lastPlayAt = Date.now();
     // Yeni parca: reklam savunma durumunu sifirla
     this.adStreak = 0;
     this.adStreakKey = '';
@@ -573,7 +798,7 @@ export class AudioEngine {
                 mp.loadVideoById('${videoId}');
                 if (typeof mp.playVideo === 'function') mp.playVideo();
                 const v = document.querySelector('video');
-                if (v) { v.muted = false; v.play().catch(() => {}); }
+                if (v) { v.playbackRate = 1; v.muted = false; v.play().catch(() => {}); }
                 return true;
               }
             } catch (e) {}
@@ -585,6 +810,8 @@ export class AudioEngine {
           }
         } catch {}
       }
+      // Await sonrasi gen kontrolu: ara sira baska parca baslatildiysa bayat sonuc islenmez
+      if (gen !== this.playGen) return true;
 
       if (instantSwitched) {
         this.setVolume(this.volume).catch(() => {});
@@ -594,7 +821,9 @@ export class AudioEngine {
         return true;
       }
 
-      // 2. Eğer movie_player ile anında geçiş yapılamadıysa, tam URL yükle
+      // 2. Eger movie_player ile aninda gecis yapilamadiysa:
+      //    tam URL yukle + paralel hizli-ses koprusu (soguk baslatmada aninda ses)
+      this.startFastPath(videoId, gen).catch(() => {});
       try {
         await win.loadURL(`${WATCH_URL}${encodeURIComponent(videoId)}`);
       } catch (e: any) {
@@ -608,8 +837,13 @@ export class AudioEngine {
       await win.webContents.executeJavaScript('window.__lupin_should_play = true;', true).catch(() => {});
       win.webContents.executeJavaScript(DISABLE_AUTOPLAY_JS, true).catch(() => {});
       await this.setVolume(this.volume);
+      // Navigasyon tamamladi: bekleyen hizli-ses URL'si varsa elementi simdi kur
+      if (gen === this.playGen) {
+        await this.attachFastElement().catch(() => false);
+      }
 
       // Oynatıcı hazır olana kadar bekle ve KESİN olarak çalmayı başlat
+      // (hizli-ses hold aktifse YT standby'da kalir: sessiz + duraklatilmis)
       win.webContents.executeJavaScript(`(() => {
         return new Promise((resolve) => {
           let tries = 0;
@@ -617,18 +851,28 @@ export class AudioEngine {
             tries++;
             try {
               window.__lupin_should_play = true;
+              const hold = window.__lupin_fast_hold === true;
               const mp = document.getElementById('movie_player')
                 || document.querySelector('ytmusic-player-bar')?.querySelector('#movie_player')
                 || window.__hmp;
               const v = document.querySelector('video');
               if (mp && typeof mp.playVideo === 'function') {
-                mp.playVideo();
-                if (v && v.paused) { v.muted = false; v.play().catch(() => {}); }
+                if (!hold) {
+                  mp.playVideo();
+                  if (v && v.paused) { v.playbackRate = 1; v.muted = false; v.play().catch(() => {}); }
+                } else if (v) {
+                  try { v.muted = true; v.pause(); } catch {}
+                }
                 return resolve(true);
               }
               if (v) {
-                v.muted = false;
-                v.play().catch(() => {});
+                if (!hold) {
+                  v.playbackRate = 1;
+                  v.muted = false;
+                  v.play().catch(() => {});
+                } else {
+                  try { v.muted = true; v.pause(); } catch {}
+                }
                 return resolve(true);
               }
             } catch (e) {}
@@ -671,9 +915,15 @@ export class AudioEngine {
       await this.win.webContents.executeJavaScript(`(() => {
         try {
           window.__lupin_should_play = true;
-          const mp = document.getElementById('movie_player') || window.__hmp;
-          if (mp && typeof mp.playVideo === 'function') mp.playVideo();
-          for (const v of document.querySelectorAll('video, audio')) { v.play().catch(() => {}); }
+          const hold = window.__lupin_fast_hold === true;
+          // Hizli-ses aktifken YT standby'da kalir; sadece hizli element devam eder
+          const fa = document.getElementById('__lupin_fast');
+          if (fa) { try { (fa as HTMLAudioElement).play().catch(() => {}); } catch {} }
+          if (!hold) {
+            const mp = document.getElementById('movie_player') || window.__hmp;
+            if (mp && typeof mp.playVideo === 'function') mp.playVideo();
+            for (const v of document.querySelectorAll('video')) { v.play().catch(() => {}); }
+          }
         } catch {}
       })()`, true);
       await this.pollOnce();
@@ -685,6 +935,8 @@ export class AudioEngine {
     try {
       await this.win.webContents.executeJavaScript(`(() => {
         try {
+          const fa = document.getElementById('__lupin_fast');
+          if (fa) { try { (fa as HTMLAudioElement).currentTime = ${Number(seconds)}; } catch {} }
           const mp = document.getElementById('movie_player') || window.__hmp;
           if (mp && typeof mp.seekTo === 'function') {
             mp.seekTo(${Number(seconds)}, true);
@@ -705,6 +957,8 @@ export class AudioEngine {
     try {
       await this.win.webContents.executeJavaScript(`(() => {
         try {
+          const fa = document.getElementById('__lupin_fast');
+          if (fa) { try { (fa as HTMLAudioElement).volume = ${this.volume}; } catch {} }
           const mp = document.getElementById('movie_player') || window.__hmp;
           if (mp && typeof mp.setVolume === 'function') {
             mp.setVolume(${ytVolume});
@@ -718,11 +972,36 @@ export class AudioEngine {
 
   private async pollOnce(): Promise<void> {
     if (!this.win || this.win.isDestroyed()) return;
+    // Hizli-ses koprusu aktifken durum <audio>'dan uretilir
+    if (this.fastAudio) {
+      try {
+        const mode = await this.pollFast();
+        if (mode === 'fast') return;
+      } catch {}
+    }
     try {
       const state: any = await this.win.webContents.executeJavaScript(RESOLVE_MEDIA_JS, true);
       if (state && state.ok && this.updateCallback) {
+        // Farkli YT id'si tek poll'da benimsenmez: gecis sonrasi ilk 3 sn icinde
+        // 3, normalde 2 art arda ayni id gorulmeden currentVideoId degismez.
+        // Boylece bayat tekil raporlar secimi geri alamaz.
         if (state.videoId && state.videoId !== this.currentVideoId) {
+          if (state.videoId === this.idCandidate) {
+            this.idStreak += 1;
+          } else {
+            this.idCandidate = state.videoId;
+            this.idStreak = 1;
+          }
+          const need = Date.now() - this.lastPlayAt < 3000 ? 3 : 2;
+          if (this.idStreak < need) {
+            return;
+          }
           this.currentVideoId = state.videoId;
+          this.idCandidate = '';
+          this.idStreak = 0;
+        } else {
+          this.idCandidate = '';
+          this.idStreak = 0;
         }
 
         let pstate = typeof state.playerState === 'number' ? state.playerState : -1;

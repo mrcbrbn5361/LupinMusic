@@ -74,6 +74,7 @@ const settingsModal = document.getElementById('settingsModal') as HTMLElement;
 const btnOpenSettings = document.getElementById('btnOpenSettings');
 const btnCloseSettings = document.getElementById('btnCloseSettings');
 const settingDiscordRpc = document.getElementById('settingDiscordRpc') as HTMLInputElement;
+const discordRpcStatus = document.getElementById('discordRpcStatus') as HTMLElement;
 const settingAdblock = document.getElementById('settingAdblock') as HTMLInputElement;
 const settingDiscordAppId = document.getElementById('settingDiscordAppId') as HTMLInputElement;
 const btnSaveDiscordAppId = document.getElementById('btnSaveDiscordAppId') as HTMLButtonElement;
@@ -139,6 +140,16 @@ let radioGen = 0; // bayat radyo fetch sonuclarini eleme sayaci
 let pendingVideoId: string | null = null;
 let pendingClearTimer: any = null;
 let lastAdToastId: string | null = null;
+// Gecis sirasinda verilen seek hedefi: motor onaylayinca tekrar uygulanir (yutulmaz)
+let pendingSeek: { t: number; at: number } | null = null;
+// Kullanicinin bilerek duraklatip duraklatmadigi (tekrar-bir karari icin)
+let userPaused: boolean = false;
+
+/** HTML enjeksiyonuna karsi metin kacirma (InnerTube verisi disaridandir). */
+function esc(s: string): string {
+  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 function setPendingVideo(id: string): void {
   pendingVideoId = id;
@@ -165,6 +176,11 @@ function shuffled<T>(arr: T[]): T[] {
 
 /** Karisik mod acildiginda / kuyruk yenilendiginde calinma sirasini bir kez kurar. */
 function rebuildShuffleOrder(): void {
+  if (currentIndex < 0 || currentQueue.length === 0) {
+    shuffleOrder = [];
+    shufflePos = 0;
+    return;
+  }
   const rest = currentQueue.map((_, i) => i).filter(i => i !== currentIndex);
   shuffleOrder = [currentIndex, ...shuffled(rest)];
   shufflePos = 0;
@@ -228,7 +244,13 @@ function appendRadioTracks(tracks: Track[]): number[] {
   if (added.length > 0 && isShuffled) {
     for (const i of shuffled(added)) shuffleOrder.push(i);
   }
-  // Kuyruk cok buyurse geride kalan calinmisleri buda (en fazla 50 kayit geriye bakilir)
+  trimQueueHead();
+  if (added.length > 0) renderQueueList();
+  return added;
+}
+
+/** Kuyruk cok buyurse geride kalan calinmisleri buda (en fazla 50 kayit geriye bakilir). */
+function trimQueueHead(): void {
   if (currentIndex > 50) {
     const drop = currentIndex - 50;
     currentQueue.splice(0, drop);
@@ -239,8 +261,6 @@ function appendRadioTracks(tracks: Track[]): number[] {
       shufflePos = pos !== -1 ? pos : 0;
     }
   }
-  if (added.length > 0) renderQueueList();
-  return added;
 }
 
 /** Yeni secilen parca icin radyo listesini kurar; tohum degismisse bayat sonucu atar. */
@@ -257,9 +277,14 @@ async function ensureRadioAhead(): Promise<void> {
   if (currentQueue.length - currentIndex > 3) return;
   if (lastRelatedVideoId === currentTrack.id) return;
   isFetchingRelated = true;
-  lastRelatedVideoId = currentTrack.id;
   try {
-    await attachRadio(currentTrack, radioGen);
+    const seed = currentTrack;
+    const gen = radioGen;
+    const before = currentQueue.length;
+    await attachRadio(seed, gen);
+    // Basarisiz fetch tekrar denemeyi engellemesin: eklenemediyse kilidi koyma
+    if (currentQueue.length === before) return;
+    lastRelatedVideoId = seed.id;
   } finally {
     isFetchingRelated = false;
   }
@@ -268,9 +293,11 @@ async function ensureRadioAhead(): Promise<void> {
 /** Sira tukendiginde son bir uzatma denemesi; eklenirse true doner. */
 async function extendRadioNow(): Promise<boolean> {
   if (!currentTrack || isFetchingRelated) return false;
+  const gen = radioGen;
   isFetchingRelated = true;
   try {
     const fresh = await fetchRelatedFresh(currentTrack.id);
+    if (gen !== radioGen) return false;
     if (fresh.length === 0) return false;
     lastRelatedVideoId = currentTrack.id;
     return appendRadioTracks(fresh).length > 0;
@@ -290,6 +317,7 @@ function insertAdoptedTrack(t: Track): void {
   }
   currentIndex = at;
   currentTrack = currentQueue[at];
+  trimQueueHead();
 }
 
 // Playback Logic
@@ -332,6 +360,7 @@ async function playQueueIndex(i: number) {
 
 async function startTrack(track: Track) {
   isTrackEnding = false;
+  userPaused = false;
   const reqId = ++activePlayReqId;
   setPendingVideo(track.id);
   applyCurrentTrackUI(track);
@@ -347,9 +376,6 @@ async function startTrack(track: Track) {
   durationLabel.textContent = formatTime(currentDuration);
   progressFill.style.width = '0%';
 
-  // Add to History
-  window.api?.addToHistory?.(track);
-
   try {
     const ok = await window.api.playTrack(track);
     if (reqId !== activePlayReqId) return;
@@ -359,7 +385,10 @@ async function startTrack(track: Track) {
       showToast('⚠️ Şarkı akışı bağlanamadı, tekrar deneyin.');
       isPlaying = false;
       updatePlayPauseUI();
+      return;
     }
+    // Gecmise yalnizca gercekten baslayan parca girer
+    window.api?.addToHistory?.(track);
   } catch (err) {
     console.error('Play track failed:', err);
     if (reqId === activePlayReqId) {
@@ -383,10 +412,12 @@ async function togglePlayPause() {
   // Buton durumunu beklemeden (0ms) anında güncelle
   if (isPlaying) {
     isPlaying = false;
+    userPaused = true;
     updatePlayPauseUI();
     window.api?.pause?.().catch(() => {});
   } else {
     isPlaying = true;
+    userPaused = false;
     updatePlayPauseUI();
     window.api?.resume?.().catch(() => {});
   }
@@ -418,7 +449,10 @@ async function advance(auto: boolean) {
     currentTimeLabel.textContent = '0:00';
     progressFill.style.width = '0%';
     window.api?.seek?.(0);
-    window.api?.resume?.();
+    // Kullanicinin bilerek duraklattigi parcayi uyandirma
+    if (!userPaused) {
+      window.api?.resume?.();
+    }
     return;
   }
 
@@ -435,8 +469,14 @@ async function advance(auto: boolean) {
   if (next === -1) {
     if (auto) {
       isPlaying = false;
+      userPaused = false;
       updatePlayPauseUI();
       window.api?.pause?.().catch(() => {});
+      // Sonda dur: Play'e basilinca son parca bastan baslasin (bitis dongusu olmasin)
+      currentTime = 0;
+      currentTimeLabel.textContent = '0:00';
+      progressFill.style.width = '0%';
+      window.api?.seek?.(0).catch(() => {});
       showToast('Sıra bitti');
     } else {
       showToast('Sıranın sonundasın');
@@ -454,12 +494,15 @@ function playNext() {
 function playPrev() {
   if (currentQueue.length === 0) return;
   if (currentTime > 3) {
+    const wasPlaying = isPlaying;
     currentTime = 0;
     currentTimeLabel.textContent = '0:00';
     progressFill.style.width = '0%';
     window.api?.seek?.(0);
-    if (!isPlaying) {
+    // Duraklatilmissa duraklatilmis kalsin; caliyorsa devam etsin
+    if (wasPlaying && !isPlaying) {
       isPlaying = true;
+      userPaused = false;
       updatePlayPauseUI();
       window.api?.resume?.().catch(() => {});
     }
@@ -517,9 +560,18 @@ window.api?.onPlaybackUpdate?.((playback: {
     return;
   }
   // Motor baska bir videoya gectiyse (biz istedik ya da disaridan autoplay):
-  // - Bekledigimiz videoyu gorduk: gecis onaylandi.
+  // - Bekledigimiz videoyu gorduk: gecis onaylandi (esitlik disinda da temizle ki
+  //   iyimser UI sonrasi gelen dogrulama beklemede takilmasin).
   // - Eski videonun bayat raporu: yoksay (secimi geri almasin diye erken don).
   // - Beklenmedik yeni video: kuyruga isle ki sira listesi gercegi soylesin.
+  if (pendingVideoId && playback.videoId && playback.videoId === pendingVideoId) {
+    clearPendingVideo();
+    // Gecis sirasinda verilen seek yutulduysa simdi uygula
+    if (pendingSeek && Date.now() - pendingSeek.at < 3000) {
+      window.api?.seek?.(pendingSeek.t).catch(() => {});
+    }
+    pendingSeek = null;
+  }
   if (playback.videoId && currentTrack && currentTrack.id !== playback.videoId) {
     if (pendingVideoId && playback.videoId !== pendingVideoId) return;
     if (pendingVideoId && playback.videoId === pendingVideoId) clearPendingVideo();
@@ -541,14 +593,18 @@ window.api?.onPlaybackUpdate?.((playback: {
     applyCurrentTrackUI(currentTrack);
     window.api?.addToHistory?.(currentTrack);
   } else if (currentTrack) {
+    let patched = false;
     if (playback.title && currentTrack.title === 'Lupin Music' && playback.title !== 'YouTube Music') {
       currentTrack.title = playback.title;
       playerTitle.textContent = currentTrack.title;
+      patched = true;
     }
     if (playback.artist && currentTrack.artist === 'Lupin Audio') {
       currentTrack.artist = playback.artist;
       playerArtist.textContent = currentTrack.artist;
+      patched = true;
     }
+    if (patched) renderQueueList();
   }
 
   currentTime = playback.currentTime || 0;
@@ -564,7 +620,7 @@ window.api?.onPlaybackUpdate?.((playback: {
 
   const actuallyPlaying = !playback.paused && (playback.playerState === 1 || playback.playerState === 3);
   if (isPlaying !== actuallyPlaying) {
-    if (playback.playerState === 1 || (playback.playerState === 2 && playback.paused)) {
+    if (playback.playerState === 1 || playback.playerState === 3 || (playback.playerState === 2 && playback.paused)) {
       isPlaying = actuallyPlaying;
       updatePlayPauseUI();
     }
@@ -599,6 +655,7 @@ progressBar.addEventListener('click', (e: MouseEvent) => {
     currentTime = target;
     currentTimeLabel.textContent = formatTime(target);
     progressFill.style.width = `${ratio * 100}%`;
+    pendingSeek = { t: target, at: Date.now() };
     window.api?.seek?.(target);
   }
 });
@@ -610,7 +667,16 @@ function updateVolumeIcon(v: number): void {
   btnMute.classList.toggle('muted', v === 0);
 }
 
-function setVolume(val: number) {
+// Ayar yazimlarini bogmamak icin ses seviyesi 300ms debounce ile persist edilir
+let settingsWriteTimer: any = null;
+function persistVolumeSetting(v: number) {
+  if (settingsWriteTimer) clearTimeout(settingsWriteTimer);
+  settingsWriteTimer = setTimeout(() => {
+    window.api?.updateSettings?.({ volume: v });
+  }, 300);
+}
+
+function setVolume(val: number, persist: boolean = true) {
   const v = Math.max(0, Math.min(1, val));
   volumeSlider.value = String(v);
 
@@ -619,7 +685,7 @@ function setVolume(val: number) {
   volumeSlider.style.background = `linear-gradient(to right, var(--accent-pink) 0%, var(--accent-purple) ${pct}%, rgba(255, 255, 255, 0.15) ${pct}%, rgba(255, 255, 255, 0.15) 100%)`;
 
   window.api?.setVolume?.(v);
-  window.api?.updateSettings?.({ volume: v });
+  if (persist) persistVolumeSetting(v);
   updateVolumeIcon(v);
 }
 
@@ -642,7 +708,8 @@ btnMute.addEventListener('click', () => {
   const currentVol = parseFloat(volumeSlider.value);
   if (currentVol > 0) {
     prevVolume = currentVol;
-    setVolume(0);
+    // Sessizlik diske yazilmaz: yeniden acilista sessiz surpriz olmasin
+    setVolume(0, false);
     showToast('🔇 Sessize alındı');
   } else {
     setVolume(prevVolume || 0.8);
@@ -747,10 +814,10 @@ function renderQueueList() {
     item.innerHTML = `
       <img src="${track.thumbnail || './logo.png'}" class="queue-item-thumb" onerror="this.src='./logo.png'" />
       <div class="queue-item-info">
-        <div class="queue-item-title">${track.title}${radioTag}</div>
-        <div class="queue-item-artist">${track.artist}</div>
+        <div class="queue-item-title">${esc(track.title)}${radioTag}</div>
+        <div class="queue-item-artist">${esc(track.artist)}</div>
       </div>
-      <span style="font-size:11px; color:var(--text-muted);">${track.durationFormatted || ''}</span>
+      <span style="font-size:11px; color:var(--text-muted);">${esc(track.durationFormatted || '')}</span>
     `;
 
     item.addEventListener('click', () => {
@@ -796,13 +863,13 @@ function renderCards(tracks: Track[]) {
     card.setAttribute('data-id', track.id);
     card.innerHTML = `
       <div class="card-thumb-wrap">
-        <img src="${track.thumbnail || './logo.png'}" class="card-thumb" alt="${track.title}" loading="lazy" onerror="this.src='./logo.png'" />
+        <img src="${track.thumbnail || './logo.png'}" class="card-thumb" alt="${esc(track.title)}" loading="lazy" onerror="this.src='./logo.png'" />
         <div class="card-play-overlay">
           <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
         </div>
       </div>
-      <div class="card-title" title="${track.title}">${track.title}</div>
-      <div class="card-artist" title="${track.artist}">${track.artist}</div>
+      <div class="card-title" title="${esc(track.title)}">${esc(track.title)}</div>
+      <div class="card-artist" title="${esc(track.artist)}">${esc(track.artist)}</div>
     `;
 
     card.addEventListener('click', () => {
@@ -820,12 +887,15 @@ function renderCards(tracks: Track[]) {
 
 // Navigation Views
 async function loadExplore() {
+  const gen = ++browseGen;
   viewTitle.textContent = '🔥 Keşfet — Popüler Parçalar';
   cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:20px;">Lüks seçkiler yükleniyor...</div>';
   try {
     const tracks = await window.api.getExplore();
+    if (gen !== browseGen) return;
     renderCards(tracks);
   } catch (err) {
+    if (gen !== browseGen) return;
     cardsGrid.innerHTML = '<div style="color:var(--text-muted); padding:20px;">Keşfet yüklenemedi.</div>';
   }
 }
@@ -860,8 +930,9 @@ navItems.forEach(item => {
   });
 });
 
-// Search input debounce
+// Search input debounce (bayat sonuc yariş korumali)
 let searchDebounce: any = null;
+let browseGen = 0;
 searchInput.addEventListener('input', () => {
   clearTimeout(searchDebounce);
   const q = searchInput.value.trim();
@@ -871,9 +942,11 @@ searchInput.addEventListener('input', () => {
   }
 
   searchDebounce = setTimeout(async () => {
+    const gen = ++browseGen;
     viewTitle.textContent = `🔍 "${q}" için Arama Sonuçları`;
     cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:20px;">Aranıyor...</div>';
     const res = await window.api.search(q);
+    if (gen !== browseGen) return;
     renderCards(res.songs || []);
   }, 350);
 });
@@ -892,7 +965,38 @@ settingsModal.addEventListener('click', (e) => {
 settingDiscordRpc.addEventListener('change', () => {
   window.api?.updateSettings({ discordRpcEnabled: settingDiscordRpc.checked });
   showToast(settingDiscordRpc.checked ? '🎮 Discord RPC Aktif' : '⚪ Discord RPC Devre Dışı');
+  refreshRpcStatus();
 });
+
+function paintRpcStatus(s: { connected: boolean; enabled: boolean } | null) {
+  if (!discordRpcStatus) return;
+  if (!s) {
+    discordRpcStatus.textContent = 'Kontrol ediliyor…';
+    discordRpcStatus.style.color = 'var(--text-muted)';
+    return;
+  }
+  if (!s.enabled) {
+    discordRpcStatus.textContent = '⚪ Kapalı';
+    discordRpcStatus.style.color = 'var(--text-muted)';
+    discordRpcStatus.title = 'Ayarlardan Discord RPC anahtarını aç';
+  } else if (s.connected) {
+    discordRpcStatus.textContent = '🟢 Bağlı — Dinliyor olarak görünür';
+    discordRpcStatus.style.color = '#10b981';
+    discordRpcStatus.title = 'Discord profilinde Dinliyor durumu aktif';
+  } else {
+    discordRpcStatus.textContent = '🔴 Bağlı değil';
+    discordRpcStatus.style.color = '#f43f5e';
+    discordRpcStatus.title = 'Discord masaüstü uygulaması açık ve giriş yapılmış olmalı; Ayarlar > Gizlilik > Mevcut aktiviteyi göster açık olmalı';
+  }
+}
+
+async function refreshRpcStatus() {
+  try {
+    const s = await window.api?.getRpcStatus?.();
+    if (s) paintRpcStatus(s);
+  } catch {}
+}
+window.api?.onRpcStatus?.((s: { connected: boolean; enabled: boolean }) => paintRpcStatus(s));
 if (settingAdblock) {
   settingAdblock.addEventListener('change', () => {
     window.api?.updateSettings({ adblockEnabled: settingAdblock.checked });
@@ -958,6 +1062,14 @@ if (btnDiscordInvite) {
 }
 
 // Remote Control Handler (e.g. from Discord bot or local API)
+let lastVolToastAt = 0;
+function throttledVolumeToast() {
+  const now = Date.now();
+  if (now - lastVolToastAt < 800) return;
+  lastVolToastAt = now;
+  showToast(`🔊 Ses: %${Math.round(parseFloat(volumeSlider.value) * 100)}`);
+}
+
 window.api?.onRemoteControl?.((action: string, payload?: any) => {
   if (action === 'play') {
     if (!isPlaying) togglePlayPause();
@@ -971,6 +1083,9 @@ window.api?.onRemoteControl?.((action: string, payload?: any) => {
     playPrev();
   } else if (action === 'volume' && typeof payload === 'number') {
     setVolume(payload);
+  } else if (action === 'seek' && typeof payload === 'number') {
+    pendingSeek = { t: payload, at: Date.now() };
+    window.api?.seek?.(payload);
   }
 });
 
@@ -1002,19 +1117,27 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
   } else if (code === 'ArrowLeft') {
     e.preventDefault();
     if (e.shiftKey) playPrev();
-    else if (currentDuration > 0) window.api?.seek(Math.max(0, currentTime - 5));
+    else if (currentDuration > 0) {
+      const t = Math.max(0, currentTime - 5);
+      pendingSeek = { t, at: Date.now() };
+      window.api?.seek(t);
+    }
   } else if (code === 'ArrowRight') {
     e.preventDefault();
     if (e.shiftKey) playNext();
-    else if (currentDuration > 0) window.api?.seek(Math.min(currentDuration, currentTime + 5));
+    else if (currentDuration > 0) {
+      const t = Math.min(currentDuration, currentTime + 5);
+      pendingSeek = { t, at: Date.now() };
+      window.api?.seek(t);
+    }
   } else if (code === 'ArrowUp') {
     e.preventDefault();
     setVolume(parseFloat(volumeSlider.value) + 0.05);
-    showToast(`🔊 Ses: %${Math.round(parseFloat(volumeSlider.value) * 100)}`);
+    throttledVolumeToast();
   } else if (code === 'ArrowDown') {
     e.preventDefault();
     setVolume(parseFloat(volumeSlider.value) - 0.05);
-    showToast(`🔉 Ses: %${Math.round(parseFloat(volumeSlider.value) * 100)}`);
+    throttledVolumeToast();
   } else if (code === 'KeyM' || key === 'm') {
     btnMute.click();
   } else if (code === 'KeyN' || key === 'n') {
@@ -1044,6 +1167,7 @@ async function initApp() {
     if (typeof settings.discordRpcEnabled === 'boolean') {
       settingDiscordRpc.checked = settings.discordRpcEnabled;
     }
+    refreshRpcStatus().catch(() => {});
     if (settingAdblock && typeof settings.adblockEnabled === 'boolean') {
       settingAdblock.checked = settings.adblockEnabled;
     }

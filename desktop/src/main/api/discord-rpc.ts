@@ -22,6 +22,7 @@ export class DiscordRpcManager {
   private lastSentDuration: number = 0;
   private throttleTimeout: NodeJS.Timeout | null = null;
   private pendingPayload: { track: Track | null; status: PlaybackStatus; currentTime: number } | null = null;
+  private statusCallback?: (s: { connected: boolean; enabled: boolean }) => void;
 
   constructor(enabled: boolean = true, customClientId?: string) {
     this.enabled = enabled;
@@ -31,6 +32,22 @@ export class DiscordRpcManager {
     if (this.enabled) {
       this.startReconnectLoop();
     }
+  }
+
+  /** Baglanti durumu degisikliklerini dinle (Ayarlar UI gostergesi icin). */
+  public setOnStatusChange(cb: (s: { connected: boolean; enabled: boolean }) => void): void {
+    this.statusCallback = cb;
+    cb({ connected: this.isConnected, enabled: this.enabled });
+  }
+
+  public getStatus(): { connected: boolean; enabled: boolean } {
+    return { connected: this.isConnected, enabled: this.enabled };
+  }
+
+  private emitStatus(): void {
+    try {
+      this.statusCallback?.({ connected: this.isConnected, enabled: this.enabled });
+    } catch {}
   }
 
   public async setClientId(newId?: string): Promise<void> {
@@ -58,6 +75,7 @@ export class DiscordRpcManager {
       this.startReconnectLoop();
       this.connect();
     }
+    this.emitStatus();
   }
 
   private startReconnectLoop(): void {
@@ -96,6 +114,7 @@ export class DiscordRpcManager {
           this.isConnected = true;
           this.isConnecting = false;
           console.log('[DiscordRPC] ✅ Discord Rich Presence connected (App ID: ' + this.clientId + ')');
+          this.emitStatus();
           if (this.currentTrack && this.currentStatus === 'playing') {
             this.sendActivity(this.currentTrack, this.currentStatus, this.currentTime);
           }
@@ -107,6 +126,7 @@ export class DiscordRpcManager {
             this.isConnected = false;
             this.isConnecting = false;
             console.log('[DiscordRPC] Discord Rich Presence disconnected.');
+            this.emitStatus();
           }
         });
       });
@@ -124,6 +144,7 @@ export class DiscordRpcManager {
         this.isConnecting = false;
         try { this.rpc?.destroy(); } catch {}
         this.rpc = null;
+        this.emitStatus();
       }
       return false;
     }
@@ -220,10 +241,10 @@ export class DiscordRpcManager {
         }
       }
 
-      // Large and small image keys
-      const cover = (track.thumbnail || '').trim();
+      // Large image: yalnizca porta yuklenmis asset anahtari kullanilir.
+      // Dinamik http kapak URL'leri RPC uzerinden reddedildigi icin statik logo gonderilir.
       const assets: Record<string, string> = {
-        large_image: cover.startsWith('http') ? cover.slice(0, 256) : 'lupin_logo',
+        large_image: 'lupin_logo',
         large_text: (track.album || track.title || 'Lupin Music').slice(0, 128),
         small_image: isPlaying ? 'play_icon' : 'pause_icon',
         small_text: isPlaying ? 'Lupin Music • Çalıyor' : 'Lupin Music • Duraklatıldı'
@@ -234,7 +255,7 @@ export class DiscordRpcManager {
         { label: '💜 Lupin Music', url: 'https://github.com/mrcbrbn5361/LupinMusic' }
       ];
 
-      // Type 2 = Listening to / Dinliyor
+      // Type 2 = Listening to / Dinliyor (party/secrets yok: sade poz daha guvenilir gosterilir)
       const activity: Record<string, any> = {
         type: 2,
         details: safeTitle,
@@ -242,13 +263,6 @@ export class DiscordRpcManager {
         instance: false,
         assets,
         timestamps: Object.keys(timestamps).length > 0 ? timestamps : undefined,
-        party: {
-          id: `lupin_party_${track.id.slice(0, 16)}`,
-          size: [1, 10]
-        },
-        secrets: {
-          join: `lupin://listen?track=${track.id}`
-        },
         buttons
       };
 
@@ -308,5 +322,6 @@ export class DiscordRpcManager {
     }
     this.isConnected = false;
     this.isConnecting = false;
+    this.emitStatus();
   }
 }

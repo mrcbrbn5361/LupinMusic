@@ -24,6 +24,15 @@ const discordRpc = new DiscordRpcManager(initialSettings.discordRpcEnabled, init
 const innerTube = new InnerTubeService();
 const audioEngine = new AudioEngine();
 audioEngine.setAdblockEnabled(initialSettings.adblockEnabled !== false).catch(() => {});
+// Aninda baslatma: YT sayfasi isinirken dogrudan akisla sesi hemen ver
+audioEngine.setStreamProvider(async (videoId: string) => {
+  try {
+    const player = await innerTube.getPlayer(videoId);
+    return player?.streamUrl || null;
+  } catch {
+    return null;
+  }
+});
 
 let currentTrack: Track | null = null;
 
@@ -35,7 +44,7 @@ let pendingVideoTimer: NodeJS.Timeout | null = null;
 function setPendingVideoId(id: string): void {
   pendingVideoId = id;
   if (pendingVideoTimer) clearTimeout(pendingVideoTimer);
-  pendingVideoTimer = setTimeout(() => { pendingVideoId = null; }, 10000);
+  pendingVideoTimer = setTimeout(() => { pendingVideoId = null; }, 8000);
 }
 
 function clearPendingVideoId(): void {
@@ -169,7 +178,7 @@ app.whenReady().then(async () => {
     if (playback.videoId && !playback.isAd && (!currentTrack || currentTrack.id !== playback.videoId)) {
       // Prewarm'da bekleyen duraklatilmis videoyu parca sanma (henuz hic calinmadiysa)
       if (!currentTrack && playback.paused) {
-        pendingVideoId = null;
+        clearPendingVideoId();
       } else {
         console.log(`[AudioEngine] 🎵 Track transitioned in player: ${playback.videoId} - "${playback.title || 'Unknown'}" by ${playback.artist || 'Unknown'}`);
         currentTrack = {
@@ -204,7 +213,8 @@ app.whenReady().then(async () => {
     const dur = playback.duration || currentTrack?.duration || 0;
     const progress = dur > 0 ? (playback.currentTime / dur) * 100 : 0;
 
-    // Reklam sirasinda bot/Discord durumunu dondur: gercek sarkinin konumu korunur
+    // Reklam sirasinda bot/Discord durumunu dondur: gercek sarkinin konumu korunur.
+    // updatedAt yine de tazelenir ki bot bayatlik sanmasin.
     if (!playback.isAd) {
       botServer.updatePlaybackState({
         status,
@@ -216,6 +226,8 @@ app.whenReady().then(async () => {
       });
 
       discordRpc.update(currentTrack, status, playback.currentTime);
+    } else {
+      botServer.updatePlaybackState({});
     }
   });
 
@@ -225,9 +237,18 @@ app.whenReady().then(async () => {
   // Start local Bot REST API
   await botServer.start();
   botServer.setControlCallback((action, payload) => {
+    // Henuz hic parca secilmediyse play/resume motoru direkt calistirmaz:
+    // prewarm videosu hayalet parca olurdu. Bunun yerine renderer kuyruga karar verir.
+    if (!currentTrack && (action === 'play' || action === 'resume')) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('bot:remote-control', action, payload);
+      }
+      return;
+    }
     if (action === 'play') audioEngine.resume();
     else if (action === 'pause') audioEngine.pause();
     else if (action === 'volume' && typeof payload === 'number') audioEngine.setVolume(payload);
+    else if (action === 'seek' && typeof payload === 'number') audioEngine.seek(payload);
     else if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('bot:remote-control', action, payload);
     }
@@ -235,6 +256,11 @@ app.whenReady().then(async () => {
 
   // Connect Discord RPC
   discordRpc.connect().catch(() => {});
+  discordRpc.setOnStatusChange((s) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('discord:rpc-status', s);
+    }
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -286,9 +312,15 @@ ipcMain.handle('music:getRelated', async (_event, videoId: string) => {
 
 // Native AudioEngine IPC
 ipcMain.handle('player:play', async (_event, track: Track) => {
+  if (!track || !track.id) return false;
   currentTrack = track;
   setPendingVideoId(track.id);
-  const ok = await audioEngine.play(track.id);
+  const ok = await audioEngine.play(track.id, {
+    title: track.title,
+    artist: track.artist,
+    thumbnail: track.thumbnail,
+    duration: track.duration
+  });
   if (!ok) clearPendingVideoId();
   return ok;
 });
@@ -398,7 +430,8 @@ ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Tra
     const resp = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(discordPayload)
+      body: JSON.stringify(discordPayload),
+      signal: AbortSignal.timeout(10000)
     });
 
     if (resp.ok || resp.status === 204) {
@@ -418,3 +451,5 @@ ipcMain.handle('clipboard:writeText', (_event, text: string) => {
   clipboard.writeText(text);
   return true;
 });
+
+ipcMain.handle('discord:getRpcStatus', () => discordRpc.getStatus());

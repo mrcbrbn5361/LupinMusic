@@ -35,6 +35,7 @@ export class InnerTubeService {
   private parseDuration(str: string): number {
     if (!str) return 0;
     const parts = str.split(':').map(Number);
+    if (parts.some(p => isNaN(p))) return 0;
     if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
     if (parts.length === 2) return parts[0] * 60 + parts[1];
     return parts[0] || 0;
@@ -59,7 +60,7 @@ export class InnerTubeService {
     return url;
   }
 
-  public async request<T = any>(endpoint: string, body: Record<string, any>): Promise<T> {
+  public async request<T = any>(endpoint: string, body: Record<string, any>, timeoutMs: number = 12000): Promise<T> {
     const payload = {
       context: {
         client: {
@@ -72,22 +73,29 @@ export class InnerTubeService {
       ...body
     };
 
-    const res = await fetch(`${BASE_URL}/${endpoint}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Origin': 'https://music.youtube.com',
-        'Referer': 'https://music.youtube.com/'
-      },
-      body: JSON.stringify(payload)
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${BASE_URL}/${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Origin': 'https://music.youtube.com',
+          'Referer': 'https://music.youtube.com/'
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
 
-    if (!res.ok) {
-      throw new Error(`InnerTube request failed (${endpoint}): ${res.status}`);
+      if (!res.ok) {
+        throw new Error(`InnerTube request failed (${endpoint}): ${res.status}`);
+      }
+
+      return res.json() as Promise<T>;
+    } finally {
+      clearTimeout(timer);
     }
-
-    return res.json() as Promise<T>;
   }
 
   private parseSongItem(item: any): Song | null {
@@ -233,7 +241,8 @@ export class InnerTubeService {
           'Origin': 'https://www.youtube.com',
           'Referer': 'https://www.youtube.com/'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10000)
       });
 
       if (!res.ok) {
