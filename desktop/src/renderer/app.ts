@@ -74,6 +74,7 @@ const settingsModal = document.getElementById('settingsModal') as HTMLElement;
 const btnOpenSettings = document.getElementById('btnOpenSettings');
 const btnCloseSettings = document.getElementById('btnCloseSettings');
 const settingDiscordRpc = document.getElementById('settingDiscordRpc') as HTMLInputElement;
+const settingAdblock = document.getElementById('settingAdblock') as HTMLInputElement;
 const settingDiscordAppId = document.getElementById('settingDiscordAppId') as HTMLInputElement;
 const btnSaveDiscordAppId = document.getElementById('btnSaveDiscordAppId') as HTMLButtonElement;
 const settingDiscordWebhook = document.getElementById('settingDiscordWebhook') as HTMLInputElement;
@@ -882,6 +883,12 @@ settingDiscordRpc.addEventListener('change', () => {
   window.api?.updateSettings({ discordRpcEnabled: settingDiscordRpc.checked });
   showToast(settingDiscordRpc.checked ? '🎮 Discord RPC Aktif' : '⚪ Discord RPC Devre Dışı');
 });
+if (settingAdblock) {
+  settingAdblock.addEventListener('change', () => {
+    window.api?.updateSettings({ adblockEnabled: settingAdblock.checked });
+    showToast(settingAdblock.checked ? '🛡️ Reklam engelleyici açık' : '⚪ Reklam engelleyici kapalı');
+  });
+}
 
 if (btnSaveDiscordAppId && settingDiscordAppId) {
   btnSaveDiscordAppId.addEventListener('click', async () => {
@@ -1026,6 +1033,9 @@ async function initApp() {
     applyRepeatUI();
     if (typeof settings.discordRpcEnabled === 'boolean') {
       settingDiscordRpc.checked = settings.discordRpcEnabled;
+    }
+    if (settingAdblock && typeof settings.adblockEnabled === 'boolean') {
+      settingAdblock.checked = settings.adblockEnabled;
     }
     if (typeof settings.discordAppId === 'string' && settingDiscordAppId) {
       settingDiscordAppId.value = settings.discordAppId;

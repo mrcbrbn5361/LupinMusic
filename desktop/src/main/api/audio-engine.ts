@@ -5,30 +5,44 @@ const WATCH_URL = 'https://music.youtube.com/watch?v=';
 const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const CHROME_MAJOR = '131';
 
-// Reklam alan adlarını ağ seviyesinde blokla (YouTube çekirdek bütünlük uç noktaları hariç)
+// Reklam ve reklam-olcum alan adlarini ag seviyesinde blokla
+// (YouTube cekirdek butunluk, video icerik ve oynatici uclari haric)
 const AD_BLOCK_PATTERNS = [
   '*://*.doubleclick.net/*',
   '*://*.googleadservices.com/*',
   '*://*.googlesyndication.com/*',
   '*://*.googletagservices.com/*',
   '*://*.2mdn.net/*',
+  '*://*.moatads.com/*',
+  '*://*.ads.youtube.com/*',
+  '*://*.s.youtube.com/*',
   '*://adservice.google.*/*',
   '*://*.youtube.com/pagead/*',
+  '*://*.youtube.com/ptracking*',
+  '*://*.youtube.com/api/stats/ads*',
   '*://music.youtube.com/pagead/*',
+  '*://music.youtube.com/ptracking*',
+  '*://music.youtube.com/api/stats/ads*',
   '*://pagead2.googlesyndication.com/*',
   '*://ad.doubleclick.net/*',
-  '*://*.google.com/pagead/*'
+  '*://*.google.com/pagead/*',
+  '*://*.google-analytics.com/*'
 ];
 
 const ADHIDE_CSS = `
   .ytp-ad-player-overlay,
   .ytp-ad-text,
+  .ytp-ad-preview-container,
   .ytp-ad-skip-button-container,
   .ytp-ad-message-container,
   .ytp-ad-image-overlay,
-  #player-ads,
-  .ytp-ad-module,
   .ytp-ad-overlay-container,
+  .video-ads,
+  #player-ads,
+  #masthead-ad,
+  .ytp-ad-module,
+  ytd-ad-slot-renderer,
+  .ytd-ad-slot-renderer,
   ytmusic-mealbar-promo-renderer,
   ytmusic-upsell-dialog-renderer,
   .mealbar-promo-renderer,
@@ -104,12 +118,26 @@ const ADBLOCK_INJECTION_JS = `(() => {
     };
     dismissDialogs();
 
-    // 3. Güvenli reklam atlama mantığı (Asıl şarkıyı asla kesmez veya sona sarmaz)
+    // 3. Guvenli reklam atlama mantigi (Asil sarkiyi asla kesmez veya sona sarmaz)
     const skipAds = () => {
       try {
+        if (window.__lupin_adblock === false) return;
         const mp = document.getElementById('movie_player') || window.__hmp;
         const isAd = (mp && typeof mp.getAdState === 'function' && mp.getAdState() === 1)
           || (mp && mp.classList && (mp.classList.contains('ad-showing') || mp.classList.contains('ad-interrupting')));
+
+        const v = document.querySelector('video');
+
+        if (!isAd) {
+          // Reklam bitti: hiz ve sessizligi normale dondur (sarki 16x'te veya sessiz kalmasin)
+          try {
+            if (window.__lupin_should_play && v) {
+              if (v.playbackRate !== 1) v.playbackRate = 1;
+              if (v.muted) v.muted = false;
+            }
+          } catch {}
+          return;
+        }
 
         if (mp && typeof mp.skipAd === 'function') {
           try { mp.skipAd(); } catch {}
@@ -122,15 +150,12 @@ const ADBLOCK_INJECTION_JS = `(() => {
           try { b.click(); } catch {}
         }
 
-        if (isAd) {
-          const v = document.querySelector('video');
-          if (v) {
-            v.muted = true;
-            // Sadece video süresi belirgin bir reklam boyutundaysa (< 60s) ve gerçek reklam durumundaysa
-            if (v.duration && !isNaN(v.duration) && v.duration < 60 && typeof mp.getAdState === 'function' && mp.getAdState() === 1) {
-              v.playbackRate = 16;
-              v.currentTime = v.duration;
-            }
+        if (v) {
+          v.muted = true;
+          // Sadece video suresi belirgin bir reklam boyutundaysa (< 60s) ve gercek reklam durumundaysa
+          if (v.duration && !isNaN(v.duration) && v.duration < 60 && typeof mp.getAdState === 'function' && mp.getAdState() === 1) {
+            v.playbackRate = 16;
+            v.currentTime = v.duration;
           }
         }
       } catch {}
@@ -353,9 +378,25 @@ export class AudioEngine {
   private playGen: number = 0;
   private adblockInstalled: boolean = false;
   private shouldPlay: boolean = false;
+  private adblockEnabled: boolean = true;
 
   constructor() {
     this.setupSession();
+  }
+
+  /** Reklam engelleyiciyi ac/kapat (ag blok + sayfa ici atlama). */
+  public async setAdblockEnabled(enabled: boolean): Promise<void> {
+    this.adblockEnabled = enabled;
+    if (!this.win || this.win.isDestroyed()) return;
+    try {
+      await this.win.webContents.executeJavaScript(
+        `window.__lupin_adblock = ${enabled ? 'true' : 'false'};`, true
+      ).catch(() => {});
+    } catch {}
+  }
+
+  public isAdblockEnabled(): boolean {
+    return this.adblockEnabled;
   }
 
   private setupSession(): void {
@@ -364,8 +405,11 @@ export class AudioEngine {
     try {
       const ses = session.fromPartition(MUSIC_PARTITION);
 
-      // 1. Google/YouTube reklam domainlerini iptal et
-      ses.webRequest.onBeforeRequest({ urls: AD_BLOCK_PATTERNS }, (_details, cb) => cb({ cancel: true }));
+      // 1. Google/YouTube reklam domainlerini iptal et (kapatilabilir)
+      ses.webRequest.onBeforeRequest({ urls: AD_BLOCK_PATTERNS }, (_details, cb) => {
+        if (!this.adblockEnabled) return cb({});
+        return cb({ cancel: true });
+      });
 
       // 2. Google Bot / Electron tespitini engelle ve Chrome Client Hints ekle
       ses.setUserAgent(CHROME_UA);
@@ -447,6 +491,7 @@ export class AudioEngine {
       try {
         this.win?.webContents.executeJavaScript(ADBLOCK_INJECTION_JS, true).catch(() => {});
         this.win?.webContents.executeJavaScript(DISABLE_AUTOPLAY_JS, true).catch(() => {});
+        this.setAdblockEnabled(this.adblockEnabled).catch(() => {});
         if (this.shouldPlay) {
           this.win?.webContents.executeJavaScript('window.__lupin_should_play = true;', true).catch(() => {});
         }

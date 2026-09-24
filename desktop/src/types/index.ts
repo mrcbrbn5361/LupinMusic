@@ -38,6 +38,7 @@ export interface AppSettings {
   discordRpcEnabled: boolean;
   discordAppId?: string;
   discordWebhookUrl?: string;
+  adblockEnabled: boolean;
   botServerPort: number;
   volume: number;
   repeat: 'off' | 'all' | 'one';

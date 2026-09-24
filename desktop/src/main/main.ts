@@ -23,6 +23,7 @@ const initialSettings = store.getSettings();
 const discordRpc = new DiscordRpcManager(initialSettings.discordRpcEnabled, initialSettings.discordAppId);
 const innerTube = new InnerTubeService();
 const audioEngine = new AudioEngine();
+audioEngine.setAdblockEnabled(initialSettings.adblockEnabled !== false).catch(() => {});
 
 let currentTrack: Track | null = null;
 
@@ -320,6 +321,9 @@ ipcMain.handle('store:updateSettings', (_event, partial: Partial<AppSettings>) =
   }
   if (typeof partial.volume === 'number') {
     audioEngine.setVolume(partial.volume);
+  }
+  if (typeof partial.adblockEnabled === 'boolean') {
+    audioEngine.setAdblockEnabled(partial.adblockEnabled).catch(() => {});
   }
   return updated;
 });
