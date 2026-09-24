@@ -239,7 +239,14 @@ const RESOLVE_MEDIA_JS = `(() => {
     if (hasApi) {
       let isAd = false;
       try { if (typeof mp.getAdState === 'function' && mp.getAdState() === 1) isAd = true; } catch {}
-      if (!isAd && mp.classList && mp.classList.contains('ad-showing')) isAd = true;
+      if (!isAd && mp.classList && (mp.classList.contains('ad-showing') || mp.classList.contains('ad-interrupting'))) isAd = true;
+      // Yedek sinyal: gorunur reklam overlay elementi (gizli DOM kalintilarini sayma)
+      if (!isAd) {
+        try {
+          const ov = document.querySelector('.ytp-ad-player-overlay, .ytp-ad-image-overlay');
+          if (ov && (ov as HTMLElement).offsetParent !== null) isAd = true;
+        } catch {}
+      }
 
       let vd = null;
       try { vd = mp.getVideoData ? mp.getVideoData() : null; } catch {}
@@ -366,6 +373,8 @@ export interface PlaybackState {
   title?: string;
   artist?: string;
   thumbnail?: string;
+  /** true ise o an reklam oynuyor; UI adopt/ilerleme bu bayraga gore donar */
+  isAd?: boolean;
 }
 
 export class AudioEngine {
@@ -379,6 +388,10 @@ export class AudioEngine {
   private adblockInstalled: boolean = false;
   private shouldPlay: boolean = false;
   private adblockEnabled: boolean = true;
+  private engineMuted: boolean = false;
+  private adStreak: number = 0;
+  private adStreakKey: string = '';
+  private adSeeks: number = 0;
 
   constructor() {
     this.setupSession();
@@ -534,6 +547,14 @@ export class AudioEngine {
     const gen = ++this.playGen;
     this.currentVideoId = videoId;
     this.shouldPlay = true;
+    // Yeni parca: reklam savunma durumunu sifirla
+    this.adStreak = 0;
+    this.adStreakKey = '';
+    this.adSeeks = 0;
+    if (this.engineMuted) {
+      this.engineMuted = false;
+      try { this.win?.webContents.setAudioMuted(false); } catch {}
+    }
     const win = this.ensureWindow();
 
     try {
@@ -740,6 +761,42 @@ export class AudioEngine {
         }
 
         const isPaused = !this.shouldPlay || (state.paused && pstate === 2);
+        const isAd = state.isAd === true;
+
+        // Reklam savunmasi: art arda dogrulanan reklamda sesi motor seviyesinde kes
+        // ve reklami sonuna sar (sarki suresi ne olursa olsun; gercek icerige dokunulmaz
+        // cunku yalnizca isAd bayragi kalkmayinca devreye girer).
+        if (isAd && this.adblockEnabled) {
+          if (!this.engineMuted) {
+            this.engineMuted = true;
+            try { this.win?.webContents.setAudioMuted(true); } catch {}
+          }
+          const streakKey = state.videoId || this.currentVideoId;
+          this.adStreak = (this.adStreakKey === streakKey) ? this.adStreak + 1 : 1;
+          this.adStreakKey = streakKey;
+          if (this.adStreak >= 2 && this.adSeeks < 3 && dur > 0) {
+            this.adSeeks += 1;
+            this.win?.webContents.executeJavaScript(`(() => {
+              try {
+                const mp = document.getElementById('movie_player') || window.__hmp;
+                if (mp && typeof mp.seekTo === 'function' && typeof mp.getDuration === 'function') {
+                  const d = mp.getDuration();
+                  if (d > 0) mp.seekTo(d, true);
+                }
+                const v = document.querySelector('video');
+                if (v && v.duration > 0) { v.muted = true; v.playbackRate = 16; v.currentTime = v.duration; }
+              } catch {}
+            })()`, true).catch(() => {});
+          }
+        } else {
+          this.adStreak = 0;
+          this.adStreakKey = '';
+          this.adSeeks = 0;
+          if (this.engineMuted) {
+            this.engineMuted = false;
+            try { this.win?.webContents.setAudioMuted(false); } catch {}
+          }
+        }
 
         this.updateCallback({
           currentTime: cur,
@@ -749,7 +806,8 @@ export class AudioEngine {
           videoId: state.videoId || this.currentVideoId,
           title: state.title || undefined,
           artist: state.artist || undefined,
-          thumbnail: state.thumbnail || undefined
+          thumbnail: state.thumbnail || undefined,
+          isAd
         });
       }
     } catch {}

@@ -138,6 +138,7 @@ let radioGen = 0; // bayat radyo fetch sonuclarini eleme sayaci
 // Motor gecisi sirasinda eski videodan gelen bayat raporlari eleme
 let pendingVideoId: string | null = null;
 let pendingClearTimer: any = null;
+let lastAdToastId: string | null = null;
 
 function setPendingVideo(id: string): void {
   pendingVideoId = id;
@@ -505,7 +506,16 @@ window.api?.onPlaybackUpdate?.((playback: {
   title?: string;
   artist?: string;
   thumbnail?: string;
+  isAd?: boolean;
 }) => {
+  // Reklam anonsu: parcada bir kez bilgi ver, gercek sarkinin ekranini koru
+  if (playback.isAd) {
+    if (currentTrack && lastAdToastId !== currentTrack.id) {
+      lastAdToastId = currentTrack.id;
+      showToast('Reklam atlanıyor…');
+    }
+    return;
+  }
   // Motor baska bir videoya gectiyse (biz istedik ya da disaridan autoplay):
   // - Bekledigimiz videoyu gorduk: gecis onaylandi.
   // - Eski videonun bayat raporu: yoksay (secimi geri almasin diye erken don).

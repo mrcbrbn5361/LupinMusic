@@ -32,6 +32,7 @@ const api = {
     title?: string;
     artist?: string;
     thumbnail?: string;
+    isAd?: boolean;
   }) => void) => {
     ipcRenderer.on('player:update', (_event, playback) => callback(playback));
   },

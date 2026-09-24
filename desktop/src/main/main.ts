@@ -165,7 +165,8 @@ app.whenReady().then(async () => {
       clearPendingVideoId();
     }
     // Autoplay / Radio track transition detection
-    if (playback.videoId && (!currentTrack || currentTrack.id !== playback.videoId)) {
+    // (reklam oynarken adopt YOK: reklam videosu parca sanilip kuyruk/bot kirlenmez)
+    if (playback.videoId && !playback.isAd && (!currentTrack || currentTrack.id !== playback.videoId)) {
       // Prewarm'da bekleyen duraklatilmis videoyu parca sanma (henuz hic calinmadiysa)
       if (!currentTrack && playback.paused) {
         pendingVideoId = null;
@@ -203,16 +204,19 @@ app.whenReady().then(async () => {
     const dur = playback.duration || currentTrack?.duration || 0;
     const progress = dur > 0 ? (playback.currentTime / dur) * 100 : 0;
 
-    botServer.updatePlaybackState({
-      status,
-      isPlaying,
-      track: currentTrack,
-      currentTime: playback.currentTime,
-      duration: dur,
-      progress
-    });
+    // Reklam sirasinda bot/Discord durumunu dondur: gercek sarkinin konumu korunur
+    if (!playback.isAd) {
+      botServer.updatePlaybackState({
+        status,
+        isPlaying,
+        track: currentTrack,
+        currentTime: playback.currentTime,
+        duration: dur,
+        progress
+      });
 
-    discordRpc.update(currentTrack, status, playback.currentTime);
+      discordRpc.update(currentTrack, status, playback.currentTime);
+    }
   });
 
   // Apply initial volume
