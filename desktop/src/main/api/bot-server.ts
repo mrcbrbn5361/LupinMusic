@@ -70,6 +70,65 @@ export class BotServer {
           return res.end(JSON.stringify(this.state));
         }
 
+        // Discord Webhook & Bot Uyumlu Özel Renkli Lupin Music Embed Çıktısı
+        if (req.method === 'GET' && (url.pathname === '/api/v1/discord/embed' || url.pathname === '/discord/embed')) {
+          const track = this.state.track;
+          const fmt = (sec: number) => {
+            if (isNaN(sec) || sec < 0) return '0:00';
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60);
+            return `${m}:${s < 10 ? '0' : ''}${s}`;
+          };
+
+          const isPink = url.searchParams.get('color') !== 'purple';
+          // Lupin Pembe: #ec4899 (15485081), Lupin Mor: #8b5cf6 (9133302)
+          const embedColor = isPink ? 0xec4899 : 0x8b5cf6;
+
+          const embed = {
+            embeds: [
+              {
+                title: track ? `🎵 ${track.title}` : 'Lupin Music • Çalma Sırası Boş',
+                description: track
+                  ? `**Sanatçı:** ${track.artist}\n**Durum:** ${this.state.isPlaying ? '▶️ Çalıyor' : '⏸️ Duraklatıldı'}\n\n[🎧 Birlikte Dinle (Lupin Party)](https://discord.gg/Rma8w8JrQH)`
+                  : 'Şu anda Lupin Music uygulamasında aktif bir şarkı çalmıyor.',
+                color: embedColor,
+                author: {
+                  name: 'Lupin Music • Birlikte Dinle',
+                  icon_url: 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png'
+                },
+                thumbnail: {
+                  url: track?.thumbnail || 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png'
+                },
+                fields: [
+                  {
+                    name: '⏳ Süre',
+                    value: `\`${fmt(this.state.currentTime)} / ${fmt(this.state.duration)}\``,
+                    inline: true
+                  },
+                  {
+                    name: '🔊 İlerleme',
+                    value: `%${Math.round(this.state.progress || 0)}`,
+                    inline: true
+                  },
+                  {
+                    name: '👥 Katılım',
+                    value: '[Birlikte Dinle](https://discord.gg/Rma8w8JrQH)',
+                    inline: true
+                  }
+                ],
+                footer: {
+                  text: 'Lupin Music • Ultra Luxury Sound Experience',
+                  icon_url: 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png'
+                },
+                timestamp: new Date().toISOString()
+              }
+            ]
+          };
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify(embed));
+        }
+
         if (req.method === 'GET' && url.pathname === '/health') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ status: 'ok', app: 'Lupin Music', port: this.port }));

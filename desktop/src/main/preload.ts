@@ -13,6 +13,7 @@ const api = {
   // Music Search & Explore
   search: (query: string) => ipcRenderer.invoke('music:search', query),
   getExplore: () => ipcRenderer.invoke('music:explore'),
+  getRelatedTracks: (videoId: string) => ipcRenderer.invoke('music:getRelated', videoId),
 
   // Audio Engine Playback Controls
   playTrack: (track: Track) => ipcRenderer.invoke('player:play', track),
@@ -49,7 +50,13 @@ const api = {
   // Remote Control Events
   onRemoteControl: (callback: (action: string, payload?: any) => void) => {
     ipcRenderer.on('bot:remote-control', (_event, action, payload) => callback(action, payload));
-  }
+  },
+
+  // Discord Webhook & Sharing
+  sendDiscordWebhookInvite: (payload: { track: Track; currentTime?: number; duration?: number; webhookUrl?: string }): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('discord:sendWebhookInvite', payload),
+  copyToClipboard: (text: string): Promise<boolean> =>
+    ipcRenderer.invoke('clipboard:writeText', text)
 };
 
 contextBridge.exposeInMainWorld('api', api);

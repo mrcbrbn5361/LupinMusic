@@ -14,6 +14,7 @@ const defaultData: LocalStoreData = {
   settings: {
     discordRpcEnabled: true,
     discordAppId: '',
+    discordWebhookUrl: '',
     botServerPort: 9863,
     volume: 0.8,
     repeat: 'off',

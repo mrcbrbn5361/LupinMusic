@@ -5,6 +5,8 @@ declare global {
   }
 }
 
+export {};
+
 interface Track {
   id: string;
   title: string;
@@ -13,6 +15,8 @@ interface Track {
   thumbnail: string;
   duration?: number;
   durationFormatted?: string;
+  /** Kuyruk kaynagi: kullanicinin sectigi parca mi, radyo ile eklenen mi */
+  source?: 'pick' | 'radio';
 }
 
 // State
@@ -72,6 +76,9 @@ const btnCloseSettings = document.getElementById('btnCloseSettings');
 const settingDiscordRpc = document.getElementById('settingDiscordRpc') as HTMLInputElement;
 const settingDiscordAppId = document.getElementById('settingDiscordAppId') as HTMLInputElement;
 const btnSaveDiscordAppId = document.getElementById('btnSaveDiscordAppId') as HTMLButtonElement;
+const settingDiscordWebhook = document.getElementById('settingDiscordWebhook') as HTMLInputElement;
+const btnSaveDiscordWebhook = document.getElementById('btnSaveDiscordWebhook') as HTMLButtonElement;
+const btnDiscordInvite = document.getElementById('btnDiscordInvite') as HTMLButtonElement;
 
 // Toast Helper
 function showToast(message: string) {
@@ -118,31 +125,225 @@ function applyCurrentTrackUI(track: Track) {
 }
 
 let activePlayReqId = 0;
+let isFetchingRelated = false;
+let lastRelatedVideoId = '';
+let isTrackEnding = false;
 
-// Playback Logic
-async function playTrack(track: Track, queue?: Track[]) {
-  if (queue && queue.length > 0) {
-    currentQueue = [...queue];
-    currentIndex = currentQueue.findIndex(t => t.id === track.id);
-    if (currentIndex === -1) {
-      currentQueue.unshift(track);
-      currentIndex = 0;
-    }
-  } else if (currentQueue.length === 0) {
-    currentQueue = [track];
-    currentIndex = 0;
+// Kararli kuyruk / karisik-sira durumu
+let shuffleOrder: number[] = []; // karisik modda kuyruk indexlerinin calinma sirasi
+let shufflePos = 0; // shuffleOrder icinde su anki konum
+let radioGen = 0; // bayat radyo fetch sonuclarini eleme sayaci
+
+// Motor gecisi sirasinda eski videodan gelen bayat raporlari eleme
+let pendingVideoId: string | null = null;
+let pendingClearTimer: any = null;
+
+function setPendingVideo(id: string): void {
+  pendingVideoId = id;
+  if (pendingClearTimer) clearTimeout(pendingClearTimer);
+  pendingClearTimer = setTimeout(() => { pendingVideoId = null; }, 8000);
+}
+
+function clearPendingVideo(): void {
+  pendingVideoId = null;
+  if (pendingClearTimer) {
+    clearTimeout(pendingClearTimer);
+    pendingClearTimer = null;
+  }
+}
+
+function shuffled<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/** Karisik mod acildiginda / kuyruk yenilendiginde calinma sirasini bir kez kurar. */
+function rebuildShuffleOrder(): void {
+  const rest = currentQueue.map((_, i) => i).filter(i => i !== currentIndex);
+  shuffleOrder = [currentIndex, ...shuffled(rest)];
+  shufflePos = 0;
+}
+
+function syncShufflePos(): void {
+  if (!isShuffled) return;
+  const pos = shuffleOrder.indexOf(currentIndex);
+  if (pos !== -1) {
+    shufflePos = pos;
   } else {
-    const idx = currentQueue.findIndex(t => t.id === track.id);
-    if (idx !== -1) {
-      currentIndex = idx;
-    } else {
-      currentQueue.splice(currentIndex + 1, 0, track);
-      currentIndex += 1;
+    shuffleOrder.splice(shufflePos + 1, 0, currentIndex);
+    shufflePos += 1;
+  }
+}
+
+/** Siradaki parcanin kuyruk indexi; sonda ise -1. Karisik modda onceden kurulu sira izlenir. */
+function orderedNextIndex(): number {
+  if (currentQueue.length === 0 || currentIndex < 0) return -1;
+  if (isShuffled) {
+    return shufflePos + 1 < shuffleOrder.length ? shuffleOrder[shufflePos + 1] : -1;
+  }
+  return currentIndex + 1 < currentQueue.length ? currentIndex + 1 : -1;
+}
+
+/** Onceki parcanin kuyruk indexi; basta ise -1. */
+function orderedPrevIndex(): number {
+  if (currentQueue.length === 0 || currentIndex < 0) return -1;
+  if (isShuffled) {
+    return shufflePos > 0 ? shuffleOrder[shufflePos - 1] : -1;
+  }
+  return currentIndex - 1 >= 0 ? currentIndex - 1 : -1;
+}
+
+async function fetchRelatedFresh(videoId: string): Promise<Track[]> {
+  try {
+    const related = await window.api?.getRelatedTracks?.(videoId);
+    if (Array.isArray(related)) {
+      const existingIds = new Set(currentQueue.map((t: Track) => t.id));
+      return related.filter((t: Track) => t && t.id && !existingIds.has(t.id));
+    }
+  } catch (err) {
+    console.warn('Fetch related tracks error:', err);
+  }
+  return [];
+}
+
+/**
+ * Radyo parcalarini SADECE kuyruk sonuna ekler; mevcut siralamayi asla bozmaz.
+ * Eklenen indexleri doner. Kuyruk siserse calinmis basi budar.
+ */
+function appendRadioTracks(tracks: Track[]): number[] {
+  const added: number[] = [];
+  const existingIds = new Set(currentQueue.map((t: Track) => t.id));
+  for (const t of tracks) {
+    if (!t || !t.id || existingIds.has(t.id)) continue;
+    existingIds.add(t.id);
+    currentQueue.push({ ...t, source: 'radio' });
+    added.push(currentQueue.length - 1);
+  }
+  if (added.length > 0 && isShuffled) {
+    for (const i of shuffled(added)) shuffleOrder.push(i);
+  }
+  // Kuyruk cok buyurse geride kalan calinmisleri buda (en fazla 50 kayit geriye bakilir)
+  if (currentIndex > 50) {
+    const drop = currentIndex - 50;
+    currentQueue.splice(0, drop);
+    currentIndex -= drop;
+    if (isShuffled) {
+      shuffleOrder = shuffleOrder.map(x => x - drop).filter(x => x >= 0);
+      const pos = shuffleOrder.indexOf(currentIndex);
+      shufflePos = pos !== -1 ? pos : 0;
     }
   }
+  if (added.length > 0) renderQueueList();
+  return added;
+}
 
+/** Yeni secilen parca icin radyo listesini kurar; tohum degismisse bayat sonucu atar. */
+async function attachRadio(seed: Track, gen: number): Promise<void> {
+  const fresh = await fetchRelatedFresh(seed.id);
+  if (gen !== radioGen) return;
+  if (!currentQueue.some(t => t.id === seed.id)) return;
+  appendRadioTracks(fresh);
+}
+
+/** Sira sonuna yaklasinca radyo sessizce uzatilir (siralama degismez, sadece eklenir). */
+async function ensureRadioAhead(): Promise<void> {
+  if (!currentTrack || isFetchingRelated) return;
+  if (currentQueue.length - currentIndex > 3) return;
+  if (lastRelatedVideoId === currentTrack.id) return;
+  isFetchingRelated = true;
+  lastRelatedVideoId = currentTrack.id;
+  try {
+    await attachRadio(currentTrack, radioGen);
+  } finally {
+    isFetchingRelated = false;
+  }
+}
+
+/** Sira tukendiginde son bir uzatma denemesi; eklenirse true doner. */
+async function extendRadioNow(): Promise<boolean> {
+  if (!currentTrack || isFetchingRelated) return false;
+  isFetchingRelated = true;
+  try {
+    const fresh = await fetchRelatedFresh(currentTrack.id);
+    if (fresh.length === 0) return false;
+    lastRelatedVideoId = currentTrack.id;
+    return appendRadioTracks(fresh).length > 0;
+  } finally {
+    isFetchingRelated = false;
+  }
+}
+
+/** Motorun kendi kendine gectigi (kuyruk disi) parcayi siraya isler; kuyruk hep gercegi soyler. */
+function insertAdoptedTrack(t: Track): void {
+  const at = currentIndex + 1;
+  currentQueue.splice(at, 0, { ...t, source: 'radio' });
+  if (isShuffled) {
+    shuffleOrder = shuffleOrder.map(x => (x >= at ? x + 1 : x));
+    shuffleOrder.splice(shufflePos + 1, 0, at);
+    shufflePos += 1;
+  }
+  currentIndex = at;
+  currentTrack = currentQueue[at];
+}
+
+// Playback Logic
+
+/**
+ * Karta tiklama = yeni tohum: kuyruk [secilen + kararli radyo] olarak kurulur.
+ * Arama/liste kalintisi kuyruga asla girmez; radyo ilk tohumdan uretilir ve
+ * ilerledikce sirasi degismez (sadece sona eklenir).
+ */
+async function playTrack(track: Track) {
+  radioGen += 1;
+  const gen = radioGen;
+  isTrackEnding = false;
+  lastRelatedVideoId = '';
+
+  currentQueue = [{ ...track, source: 'pick' }];
+  currentIndex = 0;
+  if (isShuffled) {
+    shuffleOrder = [0];
+    shufflePos = 0;
+  } else {
+    shuffleOrder = [];
+    shufflePos = 0;
+  }
+
+  await startTrack(currentQueue[0]);
+  renderQueueList();
+  attachRadio(currentQueue[0], gen).catch(() => {});
+}
+
+/** Kuyruk ici gezinme (cekmece tiklamasi, ileri/geri, otomatik gecis). Kuyrugu bozmaz. */
+async function playQueueIndex(i: number) {
+  if (i < 0 || i >= currentQueue.length) return;
+  isTrackEnding = false;
+  currentIndex = i;
+  syncShufflePos();
+  await startTrack(currentQueue[i]);
+  ensureRadioAhead().catch(() => {});
+}
+
+async function startTrack(track: Track) {
+  isTrackEnding = false;
   const reqId = ++activePlayReqId;
+  setPendingVideo(track.id);
   applyCurrentTrackUI(track);
+
+  // Anında (0ms) iyimser UI güncellemesi: Oynatıcıyı anında çalar duruma getir
+  isPlaying = true;
+  updatePlayPauseUI();
+
+  // Yeni parça için süre ve ilerleme barını sıfırla
+  currentTime = 0;
+  currentDuration = track.duration || 0;
+  currentTimeLabel.textContent = '0:00';
+  durationLabel.textContent = formatTime(currentDuration);
+  progressFill.style.width = '0%';
 
   // Add to History
   window.api?.addToHistory?.(track);
@@ -151,38 +352,42 @@ async function playTrack(track: Track, queue?: Track[]) {
     const ok = await window.api.playTrack(track);
     if (reqId !== activePlayReqId) return;
 
-    playerArtist.textContent = track.artist;
     if (!ok) {
+      clearPendingVideo();
       showToast('⚠️ Şarkı akışı bağlanamadı, tekrar deneyin.');
-      return;
+      isPlaying = false;
+      updatePlayPauseUI();
     }
-
-    isPlaying = true;
-    updatePlayPauseUI();
   } catch (err) {
     console.error('Play track failed:', err);
     if (reqId === activePlayReqId) {
-      playerArtist.textContent = track.artist;
+      clearPendingVideo();
+      isPlaying = false;
+      updatePlayPauseUI();
     }
   }
 }
 
 async function togglePlayPause() {
   if (!currentTrack) {
-    if (currentQueue.length > 0) {
-      playTrack(currentQueue[0]);
+    if (currentIndex >= 0 && currentQueue[currentIndex]) {
+      playQueueIndex(currentIndex);
+    } else if (currentQueue.length > 0) {
+      playQueueIndex(0);
     }
     return;
   }
 
+  // Buton durumunu beklemeden (0ms) anında güncelle
   if (isPlaying) {
-    await window.api.pause();
     isPlaying = false;
+    updatePlayPauseUI();
+    window.api?.pause?.().catch(() => {});
   } else {
-    await window.api.resume();
     isPlaying = true;
+    updatePlayPauseUI();
+    window.api?.resume?.().catch(() => {});
   }
-  updatePlayPauseUI();
 }
 
 function updatePlayPauseUI() {
@@ -198,36 +403,94 @@ function updatePlayPauseUI() {
   highlightActiveCard();
 }
 
-function playNext() {
+/**
+ * Sirada ilerleme: tekrar-bir aciksa basa sarar (otomatik geciste),
+ * degilse siradaki parcaya gecer. Sonda: tekrar-tumu basa doner,
+ * tekrar-kapaliysa radyo bir kez uzatilir, o da olmazsa durur.
+ */
+async function advance(auto: boolean) {
   if (currentQueue.length === 0) return;
-  if (isShuffled) {
-    currentIndex = Math.floor(Math.random() * currentQueue.length);
-  } else {
-    currentIndex = (currentIndex + 1) % currentQueue.length;
+
+  if (auto && repeatMode === 'one' && currentTrack) {
+    currentTime = 0;
+    currentTimeLabel.textContent = '0:00';
+    progressFill.style.width = '0%';
+    window.api?.seek?.(0);
+    window.api?.resume?.();
+    return;
   }
-  playTrack(currentQueue[currentIndex]);
+
+  let next = orderedNextIndex();
+  if (next === -1) {
+    if (repeatMode === 'all') {
+      next = isShuffled ? (shuffleOrder[0] ?? 0) : 0;
+    } else {
+      const extended = await extendRadioNow();
+      if (extended) next = orderedNextIndex();
+    }
+  }
+
+  if (next === -1) {
+    if (auto) {
+      isPlaying = false;
+      updatePlayPauseUI();
+      window.api?.pause?.().catch(() => {});
+      showToast('Sıra bitti');
+    } else {
+      showToast('Sıranın sonundasın');
+    }
+    return;
+  }
+
+  await playQueueIndex(next);
+}
+
+function playNext() {
+  advance(false).catch(() => {});
 }
 
 function playPrev() {
   if (currentQueue.length === 0) return;
   if (currentTime > 3) {
-    window.api.seek(0);
+    currentTime = 0;
+    currentTimeLabel.textContent = '0:00';
+    progressFill.style.width = '0%';
+    window.api?.seek?.(0);
+    if (!isPlaying) {
+      isPlaying = true;
+      updatePlayPauseUI();
+      window.api?.resume?.().catch(() => {});
+    }
     return;
   }
-  currentIndex = (currentIndex - 1 + currentQueue.length) % currentQueue.length;
-  playTrack(currentQueue[currentIndex]);
+  const prev = orderedPrevIndex();
+  if (prev === -1) {
+    // Bastayiz: parcayi basa sar
+    currentTime = 0;
+    currentTimeLabel.textContent = '0:00';
+    progressFill.style.width = '0%';
+    window.api?.seek?.(0);
+    return;
+  }
+  playQueueIndex(prev).catch(() => {});
 }
 
 // Listen for explicit Track Changed event from Main Process
 window.api?.onTrackChanged?.((track: Track) => {
   if (!track) return;
+  // Gecis sirasinda eski videonun yankisini yoksay
+  if (pendingVideoId && track.id !== pendingVideoId) return;
+  if (pendingVideoId && track.id === pendingVideoId) clearPendingVideo();
   const qIdx = currentQueue.findIndex(t => t.id === track.id);
   if (qIdx !== -1) {
     currentIndex = qIdx;
+    syncShufflePos();
     currentTrack = currentQueue[qIdx];
   } else {
-    currentTrack = track;
+    insertAdoptedTrack(track);
+    ensureRadioAhead().catch(() => {});
   }
+  if (!currentTrack) return;
   applyCurrentTrackUI(currentTrack);
 });
 
@@ -242,20 +505,27 @@ window.api?.onPlaybackUpdate?.((playback: {
   artist?: string;
   thumbnail?: string;
 }) => {
-  // If player transitioned to a new track (e.g. YouTube Music autoplay/radio)
-  if (playback.videoId && (!currentTrack || currentTrack.id !== playback.videoId)) {
+  // Motor baska bir videoya gectiyse (biz istedik ya da disaridan autoplay):
+  // - Bekledigimiz videoyu gorduk: gecis onaylandi.
+  // - Eski videonun bayat raporu: yoksay (secimi geri almasin diye erken don).
+  // - Beklenmedik yeni video: kuyruga isle ki sira listesi gercegi soylesin.
+  if (playback.videoId && currentTrack && currentTrack.id !== playback.videoId) {
+    if (pendingVideoId && playback.videoId !== pendingVideoId) return;
+    if (pendingVideoId && playback.videoId === pendingVideoId) clearPendingVideo();
     const qIdx = currentQueue.findIndex(t => t.id === playback.videoId);
     if (qIdx !== -1) {
       currentIndex = qIdx;
+      syncShufflePos();
       currentTrack = currentQueue[qIdx];
     } else {
-      currentTrack = {
+      insertAdoptedTrack({
         id: playback.videoId,
         title: playback.title || 'Lupin Music',
         artist: playback.artist || 'Lupin Audio',
         thumbnail: playback.thumbnail || `https://i.ytimg.com/vi/${playback.videoId}/hqdefault.jpg`,
         duration: playback.duration || 0
-      };
+      });
+      ensureRadioAhead().catch(() => {});
     }
     applyCurrentTrackUI(currentTrack);
     window.api?.addToHistory?.(currentTrack);
@@ -281,21 +551,31 @@ window.api?.onPlaybackUpdate?.((playback: {
     progressFill.style.width = `${pct}%`;
   }
 
-  const actuallyPlaying = !playback.paused && playback.playerState === 1;
+  const actuallyPlaying = !playback.paused && (playback.playerState === 1 || playback.playerState === 3);
   if (isPlaying !== actuallyPlaying) {
-    isPlaying = actuallyPlaying;
-    updatePlayPauseUI();
+    if (playback.playerState === 1 || (playback.playerState === 2 && playback.paused)) {
+      isPlaying = actuallyPlaying;
+      updatePlayPauseUI();
+    }
   }
 
-  // Handle Track Ended (playerState === 0)
-  // Sadece şarkı gerçekten sonuna ulaştığında (en az 3 saniye çalmış veya süre sonuna yaklaşmışsa) sonraki parçaya geç
-  if (playback.playerState === 0 && (currentTime > 3 || (currentDuration > 0 && currentTime >= currentDuration - 2))) {
-    if (repeatMode === 'one') {
-      window.api.seek(0);
-      window.api.resume();
-    } else {
-      playNext();
-    }
+  // Handle Track Ended:
+  const isNearEnd = currentDuration > 5 && (
+    (currentTime >= currentDuration - 1.5) ||
+    (currentDuration > 10 && currentTime >= currentDuration * 0.98)
+  );
+
+  const hasEnded = (playback.playerState === 0 && currentTime > 3) ||
+    (isNearEnd && playback.paused);
+
+  if (hasEnded && !isTrackEnding) {
+    isTrackEnding = true;
+    console.log('[Player] Track ended, advancing...');
+    advance(true)
+      .catch(() => {})
+      .finally(() => {
+        setTimeout(() => { isTrackEnding = false; }, 2000);
+      });
   }
 });
 
@@ -305,11 +585,20 @@ progressBar.addEventListener('click', (e: MouseEvent) => {
   const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
   if (currentDuration > 0) {
     const target = ratio * currentDuration;
-    window.api.seek(target);
+    currentTime = target;
+    currentTimeLabel.textContent = formatTime(target);
+    progressFill.style.width = `${ratio * 100}%`;
+    window.api?.seek?.(target);
   }
 });
 
 // Volume control & Mute
+function updateVolumeIcon(v: number): void {
+  if (!volumeIcon) return;
+  volumeIcon.style.opacity = v === 0 ? '0.35' : '1';
+  btnMute.classList.toggle('muted', v === 0);
+}
+
 function setVolume(val: number) {
   const v = Math.max(0, Math.min(1, val));
   volumeSlider.value = String(v);
@@ -358,25 +647,45 @@ btnPrev.addEventListener('click', playPrev);
 btnShuffle.addEventListener('click', () => {
   isShuffled = !isShuffled;
   btnShuffle.classList.toggle('active', isShuffled);
+  if (isShuffled && currentQueue.length > 0 && currentIndex >= 0) {
+    // Karisik sira bir kez kurulur; her adimda yeniden zar atilmaz
+    rebuildShuffleOrder();
+  } else {
+    shuffleOrder = [];
+    shufflePos = 0;
+  }
+  window.api?.updateSettings?.({ shuffle: isShuffled });
   showToast(isShuffled ? '🔀 Karışık çalma açık' : '➡️ Sıralı çalma açık');
 });
+
+function applyRepeatUI() {
+  if (repeatMode === 'off') {
+    btnRepeat.classList.remove('active');
+    btnRepeat.style.filter = 'none';
+  } else if (repeatMode === 'all') {
+    btnRepeat.classList.add('active');
+    btnRepeat.style.filter = 'none';
+    btnRepeat.title = 'Tümünü tekrarla (açık)';
+  } else {
+    btnRepeat.classList.add('active');
+    btnRepeat.style.filter = 'drop-shadow(0 0 6px var(--accent-pink))';
+    btnRepeat.title = 'Şarkıyı tekrarla (açık)';
+  }
+}
 
 btnRepeat.addEventListener('click', () => {
   if (repeatMode === 'off') {
     repeatMode = 'all';
-    btnRepeat.classList.add('active');
     showToast('🔁 Tümünü tekrarla');
   } else if (repeatMode === 'all') {
     repeatMode = 'one';
-    btnRepeat.classList.add('active');
-    btnRepeat.style.filter = 'drop-shadow(0 0 6px var(--accent-pink))';
     showToast('🔂 Şarkıyı tekrarla');
   } else {
     repeatMode = 'off';
-    btnRepeat.classList.remove('active');
-    btnRepeat.style.filter = 'none';
     showToast('➡️ Tekrar kapalı');
   }
+  applyRepeatUI();
+  window.api?.updateSettings?.({ repeat: repeatMode });
 });
 
 // Like Button
@@ -421,22 +730,32 @@ function renderQueueList() {
   currentQueue.forEach((track, i) => {
     const item = document.createElement('div');
     item.className = 'queue-item' + (i === currentIndex ? ' current' : '');
+    const radioTag = (i > currentIndex && track.source === 'radio')
+      ? '<span style="font-size:10px; color:var(--accent-pink); border:1px solid var(--accent-pink); border-radius:8px; padding:1px 6px; margin-left:6px;">Radyo</span>'
+      : '';
     item.innerHTML = `
       <img src="${track.thumbnail || './logo.png'}" class="queue-item-thumb" onerror="this.src='./logo.png'" />
       <div class="queue-item-info">
-        <div class="queue-item-title">${track.title}</div>
+        <div class="queue-item-title">${track.title}${radioTag}</div>
         <div class="queue-item-artist">${track.artist}</div>
       </div>
       <span style="font-size:11px; color:var(--text-muted);">${track.durationFormatted || ''}</span>
     `;
 
     item.addEventListener('click', () => {
-      currentIndex = i;
-      playTrack(track);
+      if (currentTrack && currentTrack.id === track.id) {
+        togglePlayPause();
+      } else {
+        playQueueIndex(i).catch(() => {});
+      }
     });
 
     queueList.appendChild(item);
   });
+
+  if (queueDrawer.classList.contains('open')) {
+    queueList.querySelector('.queue-item.current')?.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 // Highlight Active Playing Card
@@ -453,7 +772,7 @@ function highlightActiveCard() {
 }
 
 // Card Renderer
-function renderCards(tracks: Track[], queueContext?: Track[]) {
+function renderCards(tracks: Track[]) {
   cardsGrid.innerHTML = '';
   if (!tracks || tracks.length === 0) {
     cardsGrid.innerHTML = '<div style="color:var(--text-muted); padding:20px;">Hiç şarkı bulunamadı.</div>';
@@ -476,7 +795,12 @@ function renderCards(tracks: Track[], queueContext?: Track[]) {
     `;
 
     card.addEventListener('click', () => {
-      playTrack(track, queueContext || tracks);
+      if (currentTrack && currentTrack.id === track.id) {
+        togglePlayPause();
+      } else {
+        // Karta tiklama yeni tohumdur: kuyruk [secilen + kararli radyo] kurulur.
+        playTrack(track).catch(() => {});
+      }
     });
 
     cardsGrid.appendChild(card);
@@ -567,6 +891,55 @@ if (btnSaveDiscordAppId && settingDiscordAppId) {
   });
 }
 
+if (btnSaveDiscordWebhook && settingDiscordWebhook) {
+  btnSaveDiscordWebhook.addEventListener('click', async () => {
+    const val = settingDiscordWebhook.value.trim();
+    await window.api?.updateSettings({ discordWebhookUrl: val });
+    showToast(val ? '🚀 Discord Webhook kaydedildi!' : '⚪ Discord Webhook temizlendi');
+  });
+}
+
+// Discord Invite Button (Direct Webhook + Markdown Copy)
+if (btnDiscordInvite) {
+  btnDiscordInvite.addEventListener('click', async () => {
+    if (!currentTrack) {
+      showToast('⚠️ Şu anda çalan bir şarkı yok!');
+      return;
+    }
+
+    const cur = currentTime || 0;
+    const dur = currentDuration || 0;
+    const fmt = (s: number) => formatTime(s);
+
+    // Discord markdown message for clipboard
+    const inviteMarkdown = `🎧 **Lupin Music • Birlikte Dinliyoruz!**\n🎵 **${currentTrack.title}** — *${currentTrack.artist}*\n⏳ Süre: \`${fmt(cur)} / ${fmt(dur)}\`\n▶️ Dinlemek için: https://youtu.be/${currentTrack.id}\n✨ Lupin Topluluğu: https://discord.gg/Rma8w8JrQH`;
+
+    try {
+      await window.api?.copyToClipboard(inviteMarkdown);
+    } catch {
+      navigator.clipboard?.writeText(inviteMarkdown).catch(() => {});
+    }
+
+    const settings = await window.api?.getSettings();
+    if (settings?.discordWebhookUrl && settings.discordWebhookUrl.startsWith('http')) {
+      showToast('⏳ Discord kanalına gönderiliyor...');
+      const res = await window.api?.sendDiscordWebhookInvite({
+        track: currentTrack,
+        currentTime: cur,
+        duration: dur
+      });
+
+      if (res?.success) {
+        showToast('🚀 Birlikte Dinle kartı kanala yollandı ve panoya kopyalandı!');
+      } else {
+        showToast('📋 Davet panoya kopyalandı! (Webhook hatası)');
+      }
+    } else {
+      showToast('📋 Birlikte Dinle daveti panoya kopyalandı! (Doğrudan kanala atmak için Ayarlar\'dan Webhook girin)');
+    }
+  });
+}
+
 // Remote Control Handler (e.g. from Discord bot or local API)
 window.api?.onRemoteControl?.((action: string, payload?: any) => {
   if (action === 'play') {
@@ -643,11 +1016,22 @@ async function initApp() {
     if (typeof settings.volume === 'number') {
       setVolume(settings.volume);
     }
+    if (settings.repeat === 'all' || settings.repeat === 'one' || settings.repeat === 'off') {
+      repeatMode = settings.repeat;
+    }
+    if (typeof settings.shuffle === 'boolean') {
+      isShuffled = settings.shuffle;
+      btnShuffle.classList.toggle('active', isShuffled);
+    }
+    applyRepeatUI();
     if (typeof settings.discordRpcEnabled === 'boolean') {
       settingDiscordRpc.checked = settings.discordRpcEnabled;
     }
     if (typeof settings.discordAppId === 'string' && settingDiscordAppId) {
       settingDiscordAppId.value = settings.discordAppId;
+    }
+    if (typeof settings.discordWebhookUrl === 'string' && settingDiscordWebhook) {
+      settingDiscordWebhook.value = settings.discordWebhookUrl;
     }
   }
 

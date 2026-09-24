@@ -37,6 +37,7 @@ export interface SearchResult {
 export interface AppSettings {
   discordRpcEnabled: boolean;
   discordAppId?: string;
+  discordWebhookUrl?: string;
   botServerPort: number;
   volume: number;
   repeat: 'off' | 'all' | 'one';

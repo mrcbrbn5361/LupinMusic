@@ -12,7 +12,10 @@
     "build:win": "npm run build:win --workspace=desktop",
     "build:mac": "npm run build:mac --workspace=desktop",
     "build:installer": "npm run build:installer --workspace=desktop",
-    "build:portable": "npm run build:portable --workspace=desktop"
+    "build:portable": "npm run build:portable --workspace=desktop",
+    "sync": "syncytium sync",
+    "sync:watch": "syncytium watch",
+    "doctor": "syncytium doctor"
   },
   "author": "Miraç Teksaslıoğlu",
   "license": "MIT",

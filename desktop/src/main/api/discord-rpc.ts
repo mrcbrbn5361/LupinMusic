@@ -230,8 +230,8 @@ export class DiscordRpcManager {
       };
 
       const buttons = [
-        { label: '💜 Discord Sunucusu', url: 'https://discord.gg/Rma8w8JrQH' },
-        { label: '🎵 Lupin Music', url: 'https://github.com/mrcbrbn5361' }
+        { label: '🎧 Birlikte Dinle', url: 'https://discord.gg/Rma8w8JrQH' },
+        { label: '💜 Lupin Music', url: 'https://github.com/mrcbrbn5361/LupinMusic' }
       ];
 
       // Type 2 = Listening to / Dinliyor
@@ -242,6 +242,13 @@ export class DiscordRpcManager {
         instance: false,
         assets,
         timestamps: Object.keys(timestamps).length > 0 ? timestamps : undefined,
+        party: {
+          id: `lupin_party_${track.id.slice(0, 16)}`,
+          size: [1, 10]
+        },
+        secrets: {
+          join: `lupin://listen?track=${track.id}`
+        },
         buttons
       };
 

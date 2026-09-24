@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, screen, clipboard } from 'electron';
 import * as path from 'path';
 import { BotServer } from './api/bot-server.js';
 import { DiscordRpcManager } from './api/discord-rpc.js';
@@ -12,6 +12,7 @@ app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 const existingFeatures = app.commandLine.getSwitchValue('enable-features');
 app.commandLine.appendSwitch('enable-features', existingFeatures ? `${existingFeatures},ClientHints,UserAgentClientHint` : 'ClientHints,UserAgentClientHint');
 
@@ -24,6 +25,25 @@ const innerTube = new InnerTubeService();
 const audioEngine = new AudioEngine();
 
 let currentTrack: Track | null = null;
+
+// Motor gecisi sirasinda eski videodan gelen bayat raporlari eleme.
+// playTrack istendiginde kurulur, motor yeni videoyu dogrulayinca temizlenir.
+let pendingVideoId: string | null = null;
+let pendingVideoTimer: NodeJS.Timeout | null = null;
+
+function setPendingVideoId(id: string): void {
+  pendingVideoId = id;
+  if (pendingVideoTimer) clearTimeout(pendingVideoTimer);
+  pendingVideoTimer = setTimeout(() => { pendingVideoId = null; }, 10000);
+}
+
+function clearPendingVideoId(): void {
+  pendingVideoId = null;
+  if (pendingVideoTimer) {
+    clearTimeout(pendingVideoTimer);
+    pendingVideoTimer = null;
+  }
+}
 
 // Single-instance lock: duplicate instances will restore current window instead of spawning multiple processes
 const gotTheLock = app.requestSingleInstanceLock();
@@ -131,21 +151,35 @@ function createWindow(): void {
 // App lifecycle
 app.whenReady().then(async () => {
   createWindow();
+  audioEngine.prewarm();
 
   // Setup AudioEngine updates
   audioEngine.setOnUpdate((playback) => {
+    // Gecis sirasinda eski videonun bayat raporu: secimi geri almasin diye yoksay
+    if (playback.videoId && pendingVideoId && playback.videoId !== pendingVideoId
+        && currentTrack && playback.videoId !== currentTrack.id) {
+      return;
+    }
+    if (playback.videoId && pendingVideoId && playback.videoId === pendingVideoId) {
+      clearPendingVideoId();
+    }
     // Autoplay / Radio track transition detection
     if (playback.videoId && (!currentTrack || currentTrack.id !== playback.videoId)) {
-      console.log(`[AudioEngine] 🎵 Track transitioned in player: ${playback.videoId} - "${playback.title || 'Unknown'}" by ${playback.artist || 'Unknown'}`);
-      currentTrack = {
-        id: playback.videoId,
-        title: playback.title || currentTrack?.title || 'Lupin Music',
-        artist: playback.artist || currentTrack?.artist || 'Lupin Audio',
-        thumbnail: playback.thumbnail || `https://i.ytimg.com/vi/${playback.videoId}/hqdefault.jpg`,
-        duration: playback.duration || currentTrack?.duration || 0
-      };
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('player:track-changed', currentTrack);
+      // Prewarm'da bekleyen duraklatilmis videoyu parca sanma (henuz hic calinmadiysa)
+      if (!currentTrack && playback.paused) {
+        pendingVideoId = null;
+      } else {
+        console.log(`[AudioEngine] 🎵 Track transitioned in player: ${playback.videoId} - "${playback.title || 'Unknown'}" by ${playback.artist || 'Unknown'}`);
+        currentTrack = {
+          id: playback.videoId,
+          title: playback.title || currentTrack?.title || 'Lupin Music',
+          artist: playback.artist || currentTrack?.artist || 'Lupin Audio',
+          thumbnail: playback.thumbnail || `https://i.ytimg.com/vi/${playback.videoId}/hqdefault.jpg`,
+          duration: playback.duration || currentTrack?.duration || 0
+        };
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('player:track-changed', currentTrack);
+        }
       }
     } else if (currentTrack) {
       if (playback.duration && (!currentTrack.duration || currentTrack.duration <= 0)) {
@@ -163,7 +197,7 @@ app.whenReady().then(async () => {
       mainWindow.webContents.send('player:update', playback);
     }
 
-    const isPlaying = !playback.paused && playback.playerState === 1;
+    const isPlaying = !playback.paused && (playback.playerState === 1 || playback.playerState === 3);
     const status: PlaybackStatus = isPlaying ? 'playing' : (currentTrack ? 'paused' : 'stopped');
     const dur = playback.duration || currentTrack?.duration || 0;
     const progress = dur > 0 ? (playback.currentTime / dur) * 100 : 0;
@@ -241,10 +275,16 @@ ipcMain.handle('music:explore', async () => {
   return innerTube.getExplore();
 });
 
+ipcMain.handle('music:getRelated', async (_event, videoId: string) => {
+  return innerTube.getRelatedTracks(videoId);
+});
+
 // Native AudioEngine IPC
 ipcMain.handle('player:play', async (_event, track: Track) => {
   currentTrack = track;
+  setPendingVideoId(track.id);
   const ok = await audioEngine.play(track.id);
+  if (!ok) clearPendingVideoId();
   return ok;
 });
 
@@ -287,3 +327,86 @@ ipcMain.handle('store:getLikedTracks', () => store.getLikedTracks());
 ipcMain.handle('store:toggleLike', (_event, track: Track) => store.toggleLikeTrack(track));
 ipcMain.handle('store:getHistory', () => store.getHistory());
 ipcMain.handle('store:addToHistory', (_event, track: Track) => store.addToHistory(track));
+
+// Discord Webhook & Sharing IPC
+ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Track; currentTime?: number; duration?: number; webhookUrl?: string }) => {
+  try {
+    const settings = store.getSettings();
+    const webhookUrl = payload.webhookUrl || settings.discordWebhookUrl;
+    if (!webhookUrl || !webhookUrl.startsWith('http')) {
+      return { success: false, error: 'Discord Webhook URL ayarlanmamış.' };
+    }
+
+    const { track, currentTime = 0, duration = 0 } = payload;
+    const fmt = (sec: number) => {
+      if (isNaN(sec) || sec < 0) return '0:00';
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${m}:${s < 10 ? '0' : ''}${s}`;
+    };
+
+    const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+    // Lupin Neon Pink: 0xec4899 (15485081)
+    const embedColor = 0xec4899;
+
+    const discordPayload = {
+      username: 'Lupin Music • Birlikte Dinle',
+      avatar_url: 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png',
+      content: '🎵 **Lupin Music ile Birlikte Dinlemeye Davet Edildiniz!**',
+      embeds: [
+        {
+          title: `🎶 ${track.title}`,
+          description: `**Sanatçı:** ${track.artist}\n**Durum:** ▶️ Çalıyor\n\n🎧 **[Lupin Party'ye Katıl (Birlikte Dinle)](https://discord.gg/Rma8w8JrQH)**\n🔗 **YouTube:** [Şarkıyı Aç](https://youtu.be/${track.id})`,
+          color: embedColor,
+          author: {
+            name: 'Lupin Music • Luxury Sound',
+            icon_url: 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png',
+            url: 'https://discord.gg/Rma8w8JrQH'
+          },
+          thumbnail: {
+            url: track.thumbnail || `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg`
+          },
+          fields: [
+            {
+              name: '⏳ Süre / İlerleme',
+              value: `\`${fmt(currentTime)} / ${fmt(duration)}\` *(%${Math.round(progress)})*`,
+              inline: true
+            },
+            {
+              name: '👥 Topluluk Kanalı',
+              value: '[Lupin Discord Sunucusu](https://discord.gg/Rma8w8JrQH)',
+              inline: true
+            }
+          ],
+          footer: {
+            text: 'Lupin Music • Ultra Luxury Sound Experience',
+            icon_url: 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png'
+          },
+          timestamp: new Date().toISOString()
+        }
+      ]
+    };
+
+    const resp = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(discordPayload)
+    });
+
+    if (resp.ok || resp.status === 204) {
+      return { success: true };
+    } else {
+      const errText = await resp.text().catch(() => '');
+      console.warn('[DiscordWebhook] Failed sending webhook:', resp.status, errText);
+      return { success: false, error: `Discord HTTP ${resp.status}: ${errText}` };
+    }
+  } catch (err: any) {
+    console.error('[DiscordWebhook] Error sending invite:', err);
+    return { success: false, error: err?.message || 'Bilinmeyen hata' };
+  }
+});
+
+ipcMain.handle('clipboard:writeText', (_event, text: string) => {
+  clipboard.writeText(text);
+  return true;
+});
