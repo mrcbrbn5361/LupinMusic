@@ -7,6 +7,20 @@ import { AudioEngine } from './api/audio-engine.js';
 import { AppStore } from './store/index.js';
 import type { Track, PlaybackStatus, AppSettings } from '../types/index.js';
 
+// Marka adi Electron varsayilani (package.json name) yerine urun adi olur;
+// app.getPath('userData') yolunu da belirler (%APPDATA%\Lupin Music).
+// Dev, kurulu surumle ayni userData + tek-instance kilidini paylasmasin diye
+// ayri ad kullanir — iki uygulama paralel acilabilir.
+if (app.isPackaged) {
+  app.setName('Lupin Music');
+} else {
+  app.setName('Lupin Music Dev');
+}
+// Gorev cubugu / medya tuslari kimligi: installer appId ile ayni, dev ayri grup.
+if (process.platform === 'win32') {
+  app.setAppUserModelId(app.isPackaged ? 'com.lupin.music' : 'com.lupin.music.dev');
+}
+
 // Prevent YouTube / Google from blocking automated browser features & autoplay policy
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -56,7 +70,11 @@ function clearPendingVideoId(): void {
 }
 
 // Deep Link Protocol (lupin://) and Single Instance Lock
-app.setAsDefaultProtocolClient('lupin');
+// Yalnizca kurulu (packaged) uretim kaydeder: dev electron.exe kendi kaydini
+// yazarsa Windows 'Electron adli uygulama acilsin mi' diyalogunu gosterir.
+if (app.isPackaged) {
+  app.setAsDefaultProtocolClient('lupin');
+}
 
 // Uygulama kapaliyken tiklanan lupin:// linki argv ile gelir; pencere ve
 // renderer hazir olana kadar bekletilir (did-finish-load sonrasi flush).

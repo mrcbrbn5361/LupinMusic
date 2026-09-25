@@ -33,7 +33,27 @@ export class AppStore {
   constructor() {
     const userData = app.getPath('userData');
     this.filePath = path.join(userData, 'lupin_store.json');
+    this.migrateLegacyStore(userData);
     this.data = this.load();
+  }
+
+  // app.setName('Lupin Music') sonrasi userData yolu degisti; eski adlandirma
+  // altindaki (lupin-music-desktop / Electron) magaza ilk acilista kopyalanir.
+  private migrateLegacyStore(userData: string): void {
+    try {
+      if (fs.existsSync(this.filePath)) return;
+      for (const legacyName of ['Lupin Music', 'lupin-music-desktop', 'Electron']) {
+        const legacyFile = path.join(app.getPath('appData'), legacyName, 'lupin_store.json');
+        if (fs.existsSync(legacyFile)) {
+          fs.mkdirSync(userData, { recursive: true });
+          fs.copyFileSync(legacyFile, this.filePath);
+          console.info(`[AppStore] Eski magaza tasindi: ${legacyFile}`);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('[AppStore] Legacy store migration failed:', e);
+    }
   }
 
   private load(): LocalStoreData {
