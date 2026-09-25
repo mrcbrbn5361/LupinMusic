@@ -489,6 +489,12 @@ export class AudioEngine {
   // Duraklatma zorlamasi: kullanici pause ettiyse YT kendi akisini (reklam sonu
   // gecisi, autonav) geri baslatsa bile motor sesi yeniden kapatir.
   private lastPauseEnforceAt: number = 0;
+  // Duraklatma anindaki konum: konum gercekten ilerliyorsa yeniden duraklat,
+  // buffering kilidinde hic dokunma (ac-kapa dongusu olusurdu).
+  private pauseAnchor: number = -1;
+  // YouTube zorla devam ederken <video>'nun ulastigi gercek konum: resume'da
+  // farki 2 sn'den buyukse kullanicinin birakigi yere geri sarilir.
+  private pauseRealCur: number = -1;
   // Baslik gecis korumasi: vid degistigi halde baslik henuz degismemis ise o deger
   // onceki videonundur; yeni baslik gelene (veya kisa pencereye) kadar kullanilmaz.
   private lastStateVid: string = '';
@@ -758,7 +764,7 @@ export class AudioEngine {
           ${keepPaused ? `
           if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
           const v0 = document.querySelector('video');
-          if (v0) { v0.playbackRate = 1; v0.muted = false; v0.pause(); }` : `
+          if (v0) { v0.playbackRate = 1; v0.muted = true; v0.pause(); }` : `
           if (mp && typeof mp.playVideo === 'function') mp.playVideo();
           const v = document.querySelector('video');
           if (v) { v.playbackRate = 1; v.muted = false; v.play().catch(() => {}); }`}
@@ -1004,7 +1010,9 @@ export class AudioEngine {
         return new Promise((resolve) => {
           let tries = 0;
           const attempt = () => {
-            tries++;
+            // Kullanici bu arada duraklattiyse isle birak (yoksa playVideo
+            // dongusu pause'u ezip "ac-kapa" yapardi)
+            if (window.__lupin_should_play === false) return resolve(false);
             try {
               window.__lupin_should_play = true;
               const hold = window.__lupin_fast_hold === true;
@@ -1050,13 +1058,18 @@ export class AudioEngine {
 
   public async pause(): Promise<void> {
     this.shouldPlay = false;
+    this.pauseAnchor = -1;
     if (!this.win || this.win.isDestroyed()) return;
     const js = `(() => {
         try {
           window.__lupin_should_play = false;
           const mp = document.getElementById('movie_player') || window.__hmp;
           if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
-          for (const v of document.querySelectorAll('video, audio')) { v.pause(); }
+          // Sesi de kapat: YouTube reklam sonu/autonav akisinda videoyu
+          // kendiliginden tekrar baslatirsa duyulabilir "ac-kapa" olmasin.
+          for (const v of document.querySelectorAll('video, audio')) {
+            try { v.muted = true; v.pause(); } catch {}
+          }
         } catch {}
       })()`;
     // Navigasyon sirasinda ilk deneme kaybolabilir: bayrak sayfaya inmeden
@@ -1074,15 +1087,34 @@ export class AudioEngine {
 
   public async resume(): Promise<void> {
     this.shouldPlay = true;
+    // YouTube duraklatma sirasinda zorla ilerlediyse, kullanici birakigi
+    // konuma geri sar ve oradan devam et
+    const anchor = this.pauseAnchor;
+    const real = this.pauseRealCur;
+    this.pauseAnchor = -1;
+    this.pauseRealCur = -1;
     if (!this.win || this.win.isDestroyed()) return;
     try {
+      if (anchor >= 0 && real >= 0 && real - anchor > 2) {
+        const back = Math.max(0, anchor);
+        this.win.webContents.executeJavaScript(`(() => {
+          try {
+            const mp = document.getElementById('movie_player') || window.__hmp;
+            if (mp && typeof mp.seekTo === 'function') mp.seekTo(${back}, true);
+            const v = document.querySelector('video');
+            if (v) v.currentTime = ${back};
+          } catch {}
+        })()`, true).catch(() => {});
+      }
       await this.win.webContents.executeJavaScript(`(() => {
         try {
           window.__lupin_should_play = true;
           const hold = window.__lupin_fast_hold === true;
           // Hizli-ses koprusu devrede: onu devam ettir, YT standby'da kalsin
           const fa = document.getElementById('__lupin_fast');
-          if (fa && hold) { try { fa.play().catch(() => {}); } catch {} }
+          if (fa && hold) { try { fa.muted = false; fa.play().catch(() => {}); } catch {} }
+          // pause() medyayi susturmustu: geri ac
+          for (const v of document.querySelectorAll('video, audio')) { try { v.muted = false; } catch {} }
           if (!hold) {
             const mp = document.getElementById('movie_player') || window.__hmp;
             if (mp && typeof mp.playVideo === 'function') mp.playVideo();
@@ -1320,21 +1352,44 @@ export class AudioEngine {
         }
 
         // Duraklatma zorlamasi: kullanici pause ettiyse YT kendi akisini
-        // (reklam sonu gecisi, autonav, hazir olma) kendiliginden baslatirsa
-        // motor sesi yeniden kapatir — aksi halde "duraklattim ama caliyor"
-        // ve presence'in playing'de kilitlenmesi olurdu.
-        // Karar <video>.paused'a bakar: pstate 3 (buffering) icinde de ses akabilir.
-        if (!this.shouldPlay && state.vPaused === false && Date.now() - this.lastPauseEnforceAt > 1000) {
-          this.lastPauseEnforceAt = Date.now();
-          console.log(`[AudioEngine] pause enforced at ${new Date().toTimeString().slice(0, 8)}: video resumed while paused (cur=${cur.toFixed(2)} pstate=${pstate})`);
-          this.win?.webContents.executeJavaScript(`(() => {
-            try {
-              window.__lupin_should_play = false;
-              const mp = document.getElementById('movie_player') || window.__hmp;
-              if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
-              for (const v of document.querySelectorAll('video, audio')) { try { v.pause(); } catch {} }
-            } catch {}
-          })()`, true).catch(() => {});
+        // (reklam sonu gecisi, autonav) geri baslatabiliyor. Motor iki onlemle
+        // kapatir: (1) medya SESSIZE alinir (pause() aninda bir kez) — boylece
+        // YouTube arada ne zaman baslarsa baslasin ses cikmaz; (2) konum
+        // GERCEKTEN ilerliyorsa yeniden duraklatilir. Buffering sirasinda
+        // (pstate 3, konum ~kilitli) hicbir seye dokunulmaz: her 1 sn'de
+        // pauseVideo() atmak sesi "ac-kapa" yapip oynatmaya devam ediyordu.
+        if (!this.shouldPlay) {
+          const drift = this.pauseAnchor >= 0 ? cur - this.pauseAnchor : 0;
+          if (state.vPaused === false && drift > 0.35 && Date.now() - this.lastPauseEnforceAt > 700) {
+            this.lastPauseEnforceAt = Date.now();
+            this.pauseRealCur = cur;
+            console.log(`[AudioEngine] pause enforced at ${new Date().toTimeString().slice(0, 8)}: YT resumed while paused (cur=${cur.toFixed(2)} pstate=${pstate})`);
+            // Cok kaydiysa videoyu da geri sar: akis durur, sarki sonuna
+            // dogru kayan sessiz bir ilerleme olmaz.
+            const rewind = this.pauseAnchor >= 0 && cur - this.pauseAnchor > 5 ? this.pauseAnchor : -1;
+            this.win?.webContents.executeJavaScript(`(() => {
+              try {
+                window.__lupin_should_play = false;
+                const mp = document.getElementById('movie_player') || window.__hmp;
+                if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
+                for (const v of document.querySelectorAll('video, audio')) {
+                  try { v.muted = true; v.pause(); } catch {}
+                }
+                ${rewind >= 0 ? `
+                const rv = document.querySelector('video');
+                if (rv) { try { rv.currentTime = ${rewind}; } catch {} }` : ''}
+              } catch {}
+            })()`, true).catch(() => {});
+          } else if (state.vPaused !== false && drift < 0.2) {
+            this.pauseAnchor = cur;
+            this.pauseRealCur = cur;
+          }
+          // Raporlanan konum DONDURULUR: YouTube sessizce ilerliyorsa bile
+          // ilerleme cubugu oynamaz, sarki "bitti" sayilmaz.
+          if (this.pauseAnchor >= 0 && cur > this.pauseAnchor) cur = this.pauseAnchor;
+        } else {
+          this.pauseAnchor = -1;
+          this.pauseRealCur = -1;
         }
 
         // Erken 'ended'/'paused' (playerState 0 veya 2) korumasi:
