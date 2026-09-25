@@ -44,7 +44,7 @@ let pendingVideoTimer: NodeJS.Timeout | null = null;
 function setPendingVideoId(id: string): void {
   pendingVideoId = id;
   if (pendingVideoTimer) clearTimeout(pendingVideoTimer);
-  pendingVideoTimer = setTimeout(() => { pendingVideoId = null; }, 8000);
+  pendingVideoTimer = setTimeout(() => { pendingVideoId = null; }, 2000);
 }
 
 function clearPendingVideoId(): void {
@@ -55,12 +55,43 @@ function clearPendingVideoId(): void {
   }
 }
 
-// Single-instance lock: duplicate instances will restore current window instead of spawning multiple processes
+// Deep Link Protocol (lupin://) and Single Instance Lock
+app.setAsDefaultProtocolClient('lupin');
+
+function handleDeepLink(rawUrl: string): void {
+  try {
+    const clean = rawUrl.replace(/^lupin:\/\/?/, 'http://localhost/');
+    const parsed = new URL(clean);
+    const videoId = parsed.searchParams.get('id') || parsed.searchParams.get('v') || parsed.pathname.replace(/^\//, '');
+    const seekTime = Number(parsed.searchParams.get('t')) || 0;
+    if (videoId && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bot:remote-control', 'playTrack', { id: videoId, seek: seekTime });
+    }
+  } catch (e) {
+    console.warn('[Main] Deep link parse error:', e);
+  }
+}
+
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
   process.exit(0);
+} else {
+  app.on('second-instance', (_event, commandLine) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+    const deepArg = commandLine.find(arg => arg.startsWith('lupin://'));
+    if (deepArg) handleDeepLink(deepArg);
+  });
 }
+
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  handleDeepLink(url);
+});
 
 function quitApplication(): void {
   try { audioEngine.destroy(); } catch {}
@@ -183,24 +214,27 @@ app.whenReady().then(async () => {
         console.log(`[AudioEngine] 🎵 Track transitioned in player: ${playback.videoId} - "${playback.title || 'Unknown'}" by ${playback.artist || 'Unknown'}`);
         currentTrack = {
           id: playback.videoId,
-          title: playback.title || currentTrack?.title || 'Lupin Music',
-          artist: playback.artist || currentTrack?.artist || 'Lupin Audio',
+          title: playback.title || 'Lupin Music',
+          artist: playback.artist || 'Lupin Audio',
           thumbnail: playback.thumbnail || `https://i.ytimg.com/vi/${playback.videoId}/hqdefault.jpg`,
-          duration: playback.duration || currentTrack?.duration || 0
+          duration: playback.duration || 0
         };
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('player:track-changed', currentTrack);
         }
       }
-    } else if (currentTrack) {
+    } else if (currentTrack && currentTrack.id === playback.videoId) {
       if (playback.duration && (!currentTrack.duration || currentTrack.duration <= 0)) {
         currentTrack.duration = playback.duration;
       }
-      if (playback.title && currentTrack.title === 'Lupin Music') {
+      if (playback.title && currentTrack.title === 'Lupin Music' && playback.title !== 'YouTube Music') {
         currentTrack.title = playback.title;
       }
       if (playback.artist && currentTrack.artist === 'Lupin Audio') {
         currentTrack.artist = playback.artist;
+      }
+      if (playback.thumbnail && (!currentTrack.thumbnail || currentTrack.thumbnail.includes('hqdefault.jpg'))) {
+        currentTrack.thumbnail = playback.thumbnail;
       }
     }
 
@@ -315,6 +349,7 @@ ipcMain.handle('player:play', async (_event, track: Track) => {
   if (!track || !track.id) return false;
   currentTrack = track;
   setPendingVideoId(track.id);
+  discordRpc.update(track, 'playing', 0);
   const ok = await audioEngine.play(track.id, {
     title: track.title,
     artist: track.artist,
@@ -326,11 +361,13 @@ ipcMain.handle('player:play', async (_event, track: Track) => {
 });
 
 ipcMain.handle('player:pause', async () => {
+  if (currentTrack) discordRpc.update(currentTrack, 'paused');
   await audioEngine.pause();
   return true;
 });
 
 ipcMain.handle('player:resume', async () => {
+  if (currentTrack) discordRpc.update(currentTrack, 'playing');
   await audioEngine.resume();
   return true;
 });
@@ -396,7 +433,7 @@ ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Tra
       embeds: [
         {
           title: `🎶 ${track.title}`,
-          description: `**Sanatçı:** ${track.artist}\n**Durum:** ▶️ Çalıyor\n\n🎧 **[Lupin Party'ye Katıl (Birlikte Dinle)](https://discord.gg/Rma8w8JrQH)**\n🔗 **YouTube:** [Şarkıyı Aç](https://youtu.be/${track.id})`,
+          description: `**Sanatçı:** ${track.artist}\n**Durum:** ▶️ Çalıyor\n\n🎧 **[Lupin Birlikte Dinle Partisi'ne Katıl](https://lupinmusic.vercel.app/party?id=${track.id}&t=${Math.floor(currentTime)})**\n🚀 **[Lupin Uygulamasında Aç](https://lupinmusic.vercel.app/play?id=${track.id})**`,
           color: embedColor,
           author: {
             name: 'Lupin Music • Luxury Sound',

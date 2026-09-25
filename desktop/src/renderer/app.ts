@@ -121,6 +121,21 @@ function applyCurrentTrackUI(track: Track) {
   playerArtist.textContent = track.artist || 'Lupin Audio';
   playerThumb.src = track.thumbnail || './logo.png';
   playerThumb.onerror = () => { playerThumb.src = './logo.png'; };
+  document.title = `${track.title || 'Lupin Music'} • ${track.artist || 'Lupin Audio'} — Lupin Music`;
+
+  if ('mediaSession' in navigator) {
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: track.title || 'Lupin Music',
+        artist: track.artist || 'Lupin Audio',
+        album: track.album || 'Lupin Luxury Music',
+        artwork: [
+          { src: track.thumbnail || './logo.png', sizes: '512x512', type: 'image/jpeg' }
+        ]
+      });
+    } catch {}
+  }
+
   updateLikeButton();
   highlightActiveCard();
   renderQueueList();
@@ -154,7 +169,7 @@ function esc(s: string): string {
 function setPendingVideo(id: string): void {
   pendingVideoId = id;
   if (pendingClearTimer) clearTimeout(pendingClearTimer);
-  pendingClearTimer = setTimeout(() => { pendingVideoId = null; }, 8000);
+  pendingClearTimer = setTimeout(() => { pendingVideoId = null; }, 2000);
 }
 
 function clearPendingVideo(): void {
@@ -217,10 +232,17 @@ function orderedPrevIndex(): number {
 
 async function fetchRelatedFresh(videoId: string): Promise<Track[]> {
   try {
-    const related = await window.api?.getRelatedTracks?.(videoId);
+    let related = await window.api?.getRelatedTracks?.(videoId);
+    if (!Array.isArray(related) || related.length === 0) {
+      related = await window.api?.getExplore?.();
+    }
     if (Array.isArray(related)) {
-      const existingIds = new Set(currentQueue.map((t: Track) => t.id));
-      return related.filter((t: Track) => t && t.id && !existingIds.has(t.id));
+      const recentIds = new Set(currentQueue.slice(Math.max(0, currentIndex - 30)).map((t: Track) => t.id));
+      let filtered = related.filter((t: Track) => t && t.id && !recentIds.has(t.id));
+      if (filtered.length === 0) {
+        filtered = related.filter((t: Track) => t && t.id && t.id !== videoId);
+      }
+      return filtered;
     }
   } catch (err) {
     console.warn('Fetch related tracks error:', err);
@@ -292,17 +314,21 @@ async function ensureRadioAhead(): Promise<void> {
 
 /** Sira tukendiginde son bir uzatma denemesi; eklenirse true doner. */
 async function extendRadioNow(): Promise<boolean> {
-  if (!currentTrack || isFetchingRelated) return false;
+  if (!currentTrack) return false;
   const gen = radioGen;
-  isFetchingRelated = true;
   try {
-    const fresh = await fetchRelatedFresh(currentTrack.id);
-    if (gen !== radioGen) return false;
-    if (fresh.length === 0) return false;
+    let fresh = await fetchRelatedFresh(currentTrack.id);
+    if (fresh.length === 0) {
+      const explore = await window.api?.getExplore?.();
+      if (Array.isArray(explore)) {
+        fresh = explore.filter(t => t && t.id && t.id !== currentTrack?.id);
+      }
+    }
+    if (gen !== radioGen || fresh.length === 0) return false;
     lastRelatedVideoId = currentTrack.id;
     return appendRadioTracks(fresh).length > 0;
-  } finally {
-    isFetchingRelated = false;
+  } catch {
+    return false;
   }
 }
 
@@ -323,29 +349,44 @@ function insertAdoptedTrack(t: Track): void {
 // Playback Logic
 
 /**
- * Karta tiklama = yeni tohum: kuyruk [secilen + kararli radyo] olarak kurulur.
- * Arama/liste kalintisi kuyruga asla girmez; radyo ilk tohumdan uretilir ve
- * ilerledikce sirasi degismez (sadece sona eklenir).
+ * Şarkı başlatma:
+ * - queueContext verilmişse (Beğenilenler, Geçmiş, Keşfet): tüm liste kuyruğa aktarılır, kullanıcı listesini dinler.
+ * - queueContext verilmemişse (Arama sonucu tekil tıklama): tohum parça + arkasından otomatik radyo kurulur.
  */
-async function playTrack(track: Track) {
+async function playTrack(track: Track, queueContext?: Track[]) {
   radioGen += 1;
   const gen = radioGen;
   isTrackEnding = false;
   lastRelatedVideoId = '';
 
-  currentQueue = [{ ...track, source: 'pick' }];
-  currentIndex = 0;
-  if (isShuffled) {
-    shuffleOrder = [0];
-    shufflePos = 0;
+  if (queueContext && queueContext.length > 1) {
+    currentQueue = queueContext.map(t => ({ ...t, source: 'pick' }));
+    const idx = currentQueue.findIndex(t => t.id === track.id);
+    currentIndex = idx !== -1 ? idx : 0;
+    if (isShuffled) {
+      rebuildShuffleOrder();
+    } else {
+      shuffleOrder = [];
+      shufflePos = 0;
+    }
+    await startTrack(currentQueue[currentIndex]);
+    renderQueueList();
+    ensureRadioAhead().catch(() => {});
   } else {
-    shuffleOrder = [];
-    shufflePos = 0;
-  }
+    currentQueue = [{ ...track, source: 'pick' }];
+    currentIndex = 0;
+    if (isShuffled) {
+      shuffleOrder = [0];
+      shufflePos = 0;
+    } else {
+      shuffleOrder = [];
+      shufflePos = 0;
+    }
 
-  await startTrack(currentQueue[0]);
-  renderQueueList();
-  attachRadio(currentQueue[0], gen).catch(() => {});
+    await startTrack(currentQueue[0]);
+    renderQueueList();
+    attachRadio(currentQueue[0], gen).catch(() => {});
+  }
 }
 
 /** Kuyruk ici gezinme (cekmece tiklamasi, ileri/geri, otomatik gecis). Kuyrugu bozmaz. */
@@ -463,6 +504,15 @@ async function advance(auto: boolean) {
     } else {
       const extended = await extendRadioNow();
       if (extended) next = orderedNextIndex();
+      // Otomatik modda liste biterse durmak yerine baştan veya rastgele devam et (kesintisiz radyo)
+      if (next === -1 && currentQueue.length > 0) {
+        if (isShuffled) {
+          rebuildShuffleOrder();
+          next = shuffleOrder[0] ?? 0;
+        } else {
+          next = (currentIndex + 1) % currentQueue.length;
+        }
+      }
     }
   }
 
@@ -592,7 +642,7 @@ window.api?.onPlaybackUpdate?.((playback: {
     }
     applyCurrentTrackUI(currentTrack);
     window.api?.addToHistory?.(currentTrack);
-  } else if (currentTrack) {
+  } else if (currentTrack && (!playback.videoId || playback.videoId === currentTrack.id)) {
     let patched = false;
     if (playback.title && currentTrack.title === 'Lupin Music' && playback.title !== 'YouTube Music') {
       currentTrack.title = playback.title;
@@ -602,6 +652,11 @@ window.api?.onPlaybackUpdate?.((playback: {
     if (playback.artist && currentTrack.artist === 'Lupin Audio') {
       currentTrack.artist = playback.artist;
       playerArtist.textContent = currentTrack.artist;
+      patched = true;
+    }
+    if (playback.thumbnail && (!currentTrack.thumbnail || currentTrack.thumbnail.includes('hqdefault.jpg'))) {
+      currentTrack.thumbnail = playback.thumbnail;
+      playerThumb.src = playback.thumbnail;
       patched = true;
     }
     if (patched) renderQueueList();
@@ -620,6 +675,10 @@ window.api?.onPlaybackUpdate?.((playback: {
 
   const actuallyPlaying = !playback.paused && (playback.playerState === 1 || playback.playerState === 3);
   if (isPlaying !== actuallyPlaying) {
+    if (userPaused && actuallyPlaying) {
+      // Kullanıcı duraklattıysa, gecikmeli gelen bayat "çalıyor" paketleri UI'yı zıplatmasın
+      return;
+    }
     if (playback.playerState === 1 || playback.playerState === 3 || (playback.playerState === 2 && playback.paused)) {
       isPlaying = actuallyPlaying;
       updatePlayPauseUI();
@@ -632,10 +691,12 @@ window.api?.onPlaybackUpdate?.((playback: {
     (currentDuration > 10 && currentTime >= currentDuration * 0.98)
   );
 
-  const hasEnded = (playback.playerState === 0 && currentTime > 3) ||
-    (isNearEnd && playback.paused);
+  const hasEnded = (playback.playerState === 0) ||
+    (isNearEnd && (playback.paused || playback.playerState === 0 || playback.playerState === 2));
 
-  if (hasEnded && !isTrackEnding) {
+  // Kullanicinin bilerek duraklattigi parca 'bitti' sanilip sirayi ilerletmesin:
+  // bayat sure/konum eslesmesiyle kendilikinden sarki degistirmesin
+  if (hasEnded && !isTrackEnding && !userPaused) {
     isTrackEnding = true;
     console.log('[Player] Track ended, advancing...');
     advance(true)
@@ -645,6 +706,20 @@ window.api?.onPlaybackUpdate?.((playback: {
       });
   }
 });
+
+// Motor poll'lari (400ms) arasinda saati canli tut: gecis/buffering aninda
+// ilerleme cubugu donmus gorunmesin; gelen poll gercegiyle toplanir
+setInterval(() => {
+  if (!isPlaying || userPaused || isTrackEnding || !currentTrack) return;
+  if (currentDuration > 0 && currentTime >= currentDuration) return;
+  currentTime = currentDuration > 0
+    ? Math.min(currentDuration, currentTime + 0.25)
+    : currentTime + 0.25;
+  currentTimeLabel.textContent = formatTime(currentTime);
+  if (currentDuration > 0) {
+    progressFill.style.width = `${Math.min(100, (currentTime / currentDuration) * 100)}%`;
+  }
+}, 250);
 
 // Seek bar click
 progressBar.addEventListener('click', (e: MouseEvent) => {
@@ -661,10 +736,25 @@ progressBar.addEventListener('click', (e: MouseEvent) => {
 });
 
 // Volume control & Mute
+// Ses seviyesine gore ikon: kapali / dusuk / yuksek (Material Design path'leri)
+const VOL_ICON_PATHS = {
+  off: 'M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z',
+  low: 'M18.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z',
+  high: 'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z'
+};
+
 function updateVolumeIcon(v: number): void {
   if (!volumeIcon) return;
-  volumeIcon.style.opacity = v === 0 ? '0.35' : '1';
+  const path = volumeIcon.querySelector('path');
+  if (path) {
+    const key = v <= 0.001 ? 'off' : v <= 0.5 ? 'low' : 'high';
+    path.setAttribute('d', VOL_ICON_PATHS[key]);
+  }
+  volumeIcon.style.opacity = v === 0 ? '0.55' : '1';
   btnMute.classList.toggle('muted', v === 0);
+  btnMute.title = v === 0
+    ? 'Sesi Aç (M Tuşu)'
+    : `Sessize Al (M Tuşu) — Ses: %${Math.round(v * 100)}`;
 }
 
 // Ayar yazimlarini bogmamak icin ses seviyesi 300ms debounce ile persist edilir
@@ -674,6 +764,13 @@ function persistVolumeSetting(v: number) {
   settingsWriteTimer = setTimeout(() => {
     window.api?.updateSettings?.({ volume: v });
   }, 300);
+}
+
+function updateEqualizerVolume(v: number) {
+  if (!equalizer) return;
+  const scale = v <= 0 ? 0 : Math.max(0.12, v);
+  equalizer.style.setProperty('--eq-scale', String(scale));
+  equalizer.style.opacity = v === 0 ? '0.2' : (v < 0.3 ? '0.6' : '1');
 }
 
 function setVolume(val: number, persist: boolean = true) {
@@ -687,6 +784,7 @@ function setVolume(val: number, persist: boolean = true) {
   window.api?.setVolume?.(v);
   if (persist) persistVolumeSetting(v);
   updateVolumeIcon(v);
+  updateEqualizerVolume(v);
 }
 
 // Mouse Wheel volume control on .volume-row
@@ -850,7 +948,7 @@ function highlightActiveCard() {
 }
 
 // Card Renderer
-function renderCards(tracks: Track[]) {
+function renderCards(tracks: Track[], queueContext?: Track[]) {
   cardsGrid.innerHTML = '';
   if (!tracks || tracks.length === 0) {
     cardsGrid.innerHTML = '<div style="color:var(--text-muted); padding:20px;">Hiç şarkı bulunamadı.</div>';
@@ -876,8 +974,7 @@ function renderCards(tracks: Track[]) {
       if (currentTrack && currentTrack.id === track.id) {
         togglePlayPause();
       } else {
-        // Karta tiklama yeni tohumdur: kuyruk [secilen + kararli radyo] kurulur.
-        playTrack(track).catch(() => {});
+        playTrack(track, queueContext).catch(() => {});
       }
     });
 
@@ -904,13 +1001,13 @@ async function loadLiked() {
   viewTitle.textContent = '💜 Beğenilen Şarkılar';
   const liked = await window.api.getLikedTracks();
   likedTrackIds = new Set(liked.map((t: Track) => t.id));
-  renderCards(liked);
+  renderCards(liked, liked);
 }
 
 async function loadHistory() {
   viewTitle.textContent = '🕒 Son Çalınanlar';
   const history = await window.api.getHistory();
-  renderCards(history);
+  renderCards(history, history);
 }
 
 navItems.forEach(item => {
@@ -1032,8 +1129,8 @@ if (btnDiscordInvite) {
     const dur = currentDuration || 0;
     const fmt = (s: number) => formatTime(s);
 
-    // Discord markdown message for clipboard
-    const inviteMarkdown = `🎧 **Lupin Music • Birlikte Dinliyoruz!**\n🎵 **${currentTrack.title}** — *${currentTrack.artist}*\n⏳ Süre: \`${fmt(cur)} / ${fmt(dur)}\`\n▶️ Dinlemek için: https://youtu.be/${currentTrack.id}\n✨ Lupin Topluluğu: https://discord.gg/Rma8w8JrQH`;
+    // Discord markdown message for clipboard (Spotify-tarzı Lupin Party daveti)
+    const inviteMarkdown = `🎧 **Lupin Music • Birlikte Dinleme Partisi**\n🎵 **${currentTrack.title}** — *${currentTrack.artist}*\n⏳ Konum: \`${fmt(cur)} / ${fmt(dur)}\`\n✨ **Lupin Music'te Katıl:** https://lupinmusic.vercel.app/party?id=${currentTrack.id}&t=${Math.floor(cur)}\n🔗 Uygulama İçi Doğrudan Bağlantı: \`lupin://party?id=${currentTrack.id}&t=${Math.floor(cur)}\``;
 
     try {
       await window.api?.copyToClipboard(inviteMarkdown);
@@ -1086,6 +1183,21 @@ window.api?.onRemoteControl?.((action: string, payload?: any) => {
   } else if (action === 'seek' && typeof payload === 'number') {
     pendingSeek = { t: payload, at: Date.now() };
     window.api?.seek?.(payload);
+  } else if (action === 'playTrack' && payload && payload.id) {
+    const trackToPlay: Track = {
+      id: payload.id,
+      title: payload.title || 'Lupin Track',
+      artist: payload.artist || 'Lupin Music',
+      thumbnail: payload.thumbnail || `https://i.ytimg.com/vi/${payload.id}/hqdefault.jpg`,
+      duration: payload.duration || 0
+    };
+    playTrack(trackToPlay).then(() => {
+      if (typeof payload.seek === 'number' && payload.seek > 0) {
+        pendingSeek = { t: payload.seek, at: Date.now() };
+        window.api?.seek?.(payload.seek);
+      }
+    });
+    showToast('🚀 Lupin Party şarkısına bağlanıldı!');
   }
 });
 
@@ -1149,6 +1261,24 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
   }
 });
 
+// Hardware Media Keys & Windows Overlay Integration (MediaSession API)
+if ('mediaSession' in navigator) {
+  try {
+    navigator.mediaSession.setActionHandler('play', () => { if (!isPlaying) togglePlayPause(); });
+    navigator.mediaSession.setActionHandler('pause', () => { if (isPlaying) togglePlayPause(); });
+    navigator.mediaSession.setActionHandler('nexttrack', () => { playNext(); });
+    navigator.mediaSession.setActionHandler('previoustrack', () => { playPrev(); });
+    navigator.mediaSession.setActionHandler('seekto', (details) => {
+      if (typeof details.seekTime === 'number') {
+        pendingSeek = { t: details.seekTime, at: Date.now() };
+        window.api?.seek?.(details.seekTime);
+      }
+    });
+  } catch (e) {
+    console.debug('[MediaSession] Action handler error:', e);
+  }
+}
+
 // App Initialization
 async function initApp() {
   const settings = await window.api?.getSettings();
@@ -1161,8 +1291,10 @@ async function initApp() {
     }
     if (typeof settings.shuffle === 'boolean') {
       isShuffled = settings.shuffle;
-      btnShuffle.classList.toggle('active', isShuffled);
+    } else {
+      isShuffled = true;
     }
+    btnShuffle.classList.toggle('active', isShuffled);
     applyRepeatUI();
     if (typeof settings.discordRpcEnabled === 'boolean') {
       settingDiscordRpc.checked = settings.discordRpcEnabled;

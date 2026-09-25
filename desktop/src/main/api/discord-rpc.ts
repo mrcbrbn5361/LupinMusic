@@ -108,35 +108,31 @@ export class DiscordRpcManager {
       this.rpc = new RPC.Client({ transport: 'ipc' });
       const client = this.rpc;
 
-      const readyPromise = new Promise<boolean>((resolve) => {
-        client.on('ready', () => {
-          if (gen !== this.connectGeneration) return resolve(false);
-          this.isConnected = true;
-          this.isConnecting = false;
-          console.log('[DiscordRPC] ✅ Discord Rich Presence connected (App ID: ' + this.clientId + ')');
-          this.emitStatus();
-          if (this.currentTrack && this.currentStatus === 'playing') {
-            this.sendActivity(this.currentTrack, this.currentStatus, this.currentTime);
-          }
-          resolve(true);
-        });
-
-        client.on('disconnected', () => {
-          if (gen === this.connectGeneration) {
-            this.isConnected = false;
-            this.isConnecting = false;
-            console.log('[DiscordRPC] Discord Rich Presence disconnected.');
-            this.emitStatus();
-          }
-        });
+      client.on('ready', () => {
+        if (gen !== this.connectGeneration) return;
+        this.isConnected = true;
+        this.isConnecting = false;
+        console.log('[DiscordRPC] ✅ Discord Rich Presence connected (App ID: ' + this.clientId + ')');
+        this.emitStatus();
+        if (this.currentTrack && this.currentStatus === 'playing') {
+          this.sendActivity(this.currentTrack, this.currentStatus, this.currentTime);
+        }
       });
 
-      const loginPromise = client.login({ clientId: this.clientId });
-      const timeoutPromise = new Promise<boolean>((_, reject) =>
-        setTimeout(() => reject(new Error('Discord connect timeout')), 3500)
+      client.on('disconnected', () => {
+        if (gen === this.connectGeneration) {
+          this.isConnected = false;
+          this.isConnecting = false;
+          console.log('[DiscordRPC] Discord Rich Presence disconnected.');
+          this.emitStatus();
+        }
+      });
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Discord connect timeout')), 8000)
       );
 
-      await Promise.race([Promise.all([readyPromise, loginPromise]), timeoutPromise]);
+      await Promise.race([client.login({ clientId: this.clientId }), timeoutPromise]);
       return true;
     } catch (err) {
       if (gen === this.connectGeneration) {
@@ -229,66 +225,53 @@ export class DiscordRpcManager {
       const safeTitle = (track.title || 'Lupin Music').slice(0, 128);
       const safeArtist = (track.artist ? `by ${track.artist}` : 'Lupin Audio').slice(0, 128);
 
-      const now = Math.floor(Date.now() / 1000);
-      const cur = Math.max(0, Math.floor(currentTime));
-      const dur = Math.max(0, Math.floor(track.duration || 0));
+      const nowMs = Date.now();
+      const curSec = Math.max(0, Math.floor(currentTime));
+      const durSec = Math.max(0, Math.floor(track.duration || 0));
 
-      const timestamps: Record<string, number> = {};
+      let startTimestamp: number | undefined;
+      let endTimestamp: number | undefined;
+
       if (isPlaying) {
-        timestamps.start = now - cur;
-        if (dur > 0 && dur > cur) {
-          timestamps.end = timestamps.start + dur;
+        startTimestamp = nowMs - (curSec * 1000);
+        if (durSec > 0 && durSec > curSec) {
+          endTimestamp = startTimestamp + (durSec * 1000);
         }
       }
 
-      // Large image: yalnizca porta yuklenmis asset anahtari kullanilir.
-      // Dinamik http kapak URL'leri RPC uzerinden reddedildigi icin statik logo gonderilir.
-      const assets: Record<string, string> = {
-        large_image: 'lupin_logo',
-        large_text: (track.album || track.title || 'Lupin Music').slice(0, 128),
-        small_image: isPlaying ? 'play_icon' : 'pause_icon',
-        small_text: isPlaying ? 'Lupin Music • Çalıyor' : 'Lupin Music • Duraklatıldı'
-      };
+      // Kapak resmi: Parçanın albüm kapağı (HTTPS) doğrudan Discord Media Proxy tarafından işlenir
+      const cover = (track.thumbnail || '').trim();
+      const defaultLogo = 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png';
+      const largeImage = cover.startsWith('http') ? cover : defaultLogo;
 
-      const buttons = [
-        { label: '🎧 Birlikte Dinle', url: 'https://discord.gg/Rma8w8JrQH' },
-        { label: '💜 Lupin Music', url: 'https://github.com/mrcbrbn5361/LupinMusic' }
+      const buttons: { label: string; url: string }[] = [
+        { label: '✨ Lupin Music • Dinle', url: `https://lupinmusic.vercel.app/play?id=${track.id}` },
+        { label: '👥 Birlikte Dinle (Party)', url: `https://lupinmusic.vercel.app/party?id=${track.id}&t=${Math.floor(currentTime)}` }
       ];
 
-      // Type 2 = Listening to / Dinliyor (party/secrets yok: sade poz daha guvenilir gosterilir)
-      const activity: Record<string, any> = {
-        type: 2,
+      // Standart setActivity (Type 0 = Playing) + Spotify-tarzı Party & Birlikte Dinle desteği!
+      const activityPayload: any = {
         details: safeTitle,
         state: safeArtist,
+        startTimestamp,
+        endTimestamp,
+        largeImageKey: largeImage,
+        largeImageText: (track.album || track.title || 'Lupin Music • Ultra Luxury Sound').slice(0, 128),
+        smallImageKey: defaultLogo,
+        smallImageText: isPlaying ? 'Çalıyor • Lupin Music' : 'Duraklatıldı',
         instance: false,
-        assets,
-        timestamps: Object.keys(timestamps).length > 0 ? timestamps : undefined,
+        partyId: `lupin_${track.id}`,
+        partySize: 1,
+        partyMax: 10,
+        joinSecret: `lupin_party_${track.id}`,
         buttons
       };
 
-      console.log(`[DiscordRPC] 🎵 Activity updated: "${safeTitle}" - ${safeArtist} (${status})`);
-
-      // Direct IPC request allows Type 2 ("Listening to")
-      (this.rpc as any).request('SET_ACTIVITY', { pid: process.pid, activity })
-        .catch(async () => {
-          // Fallback to standard setActivity
-          if (this.rpc && this.isConnected) {
-            try {
-              await this.rpc.setActivity({
-                details: safeTitle,
-                state: safeArtist,
-                startTimestamp: timestamps.start,
-                endTimestamp: timestamps.end,
-                largeImageKey: assets.large_image,
-                largeImageText: assets.large_text,
-                smallImageKey: assets.small_image,
-                smallImageText: assets.small_text,
-                instance: false,
-                buttons
-              });
-            } catch {}
-          }
-        });
+      this.rpc.setActivity(activityPayload).then(() => {
+        console.log(`[DiscordRPC] 🎵 Activity updated: "${safeTitle}" - ${safeArtist} (${status})`);
+      }).catch((e: any) => {
+        console.warn('[DiscordRPC] setActivity failed:', e?.message || e);
+      });
     } catch (e: any) {
       console.debug('[DiscordRPC] Activity update error:', e?.message || e);
     }
