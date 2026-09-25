@@ -1173,6 +1173,7 @@ if (btnDiscordInvite) {
         cardPng = await renderNowPlayingCard({
           title: currentTrack.title,
           artist: currentTrack.artist,
+          album: currentTrack.album,
           coverUrl: currentTrack.thumbnail,
           currentSec: cur,
           durationSec: dur,
