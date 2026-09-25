@@ -114,7 +114,10 @@ export class DiscordRpcManager {
         this.isConnecting = false;
         console.log('[DiscordRPC] ✅ Discord Rich Presence connected (App ID: ' + this.clientId + ')');
         this.emitStatus();
-        if (this.currentTrack && this.currentStatus === 'playing') {
+        // Yeniden baglanti sonrasi mevcut durumu tazele (duraklatilmisken de gorunsun)
+        if (this.currentTrack && this.currentStatus !== 'stopped') {
+          this.lastSentTrackId = undefined;
+          this.lastSentStatus = undefined;
           this.sendActivity(this.currentTrack, this.currentStatus, this.currentTime);
         }
       });
@@ -215,15 +218,16 @@ export class DiscordRpcManager {
     if (!this.rpc || !this.isConnected || !track || status === 'stopped') return;
 
     try {
+      // Rate-limit sayaci GONDERIM DENEMESI aninda yukselir (Discord limiti denemeye sayar);
+      // lastSent* muhurleri yalniz BAŞARILI setActivity sonrasi yazilir ki hatali payload
+      // sonraki guncellemede otomatik yeniden denenmis olsun.
       this.lastActivitySentTime = Date.now();
-      this.lastSentTrackId = track.id;
-      this.lastSentStatus = status;
-      this.lastSentCurrentTime = currentTime;
-      this.lastSentDuration = track.duration || 0;
 
       const isPlaying = status === 'playing';
       const safeTitle = (track.title || 'Lupin Music').slice(0, 128);
-      const safeArtist = (track.artist ? `by ${track.artist}` : 'Lupin Audio').slice(0, 128);
+      const artist = (track.artist || 'Lupin Audio').trim();
+      const album = (track.album || '').trim();
+      const safeState = (album ? `by ${artist} • ${album}` : `by ${artist}`).slice(0, 128);
 
       const nowMs = Date.now();
       const curSec = Math.max(0, Math.floor(currentTime));
@@ -239,36 +243,39 @@ export class DiscordRpcManager {
         }
       }
 
-      // Kapak resmi: Parçanın albüm kapağı (HTTPS) doğrudan Discord Media Proxy tarafından işlenir
+      // Kapak resmi: Parcanin album kapi (HTTPS) dogrudan Discord Media Proxy tarafindan islenir
       const cover = (track.thumbnail || '').trim();
       const defaultLogo = 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png';
       const largeImage = cover.startsWith('http') ? cover : defaultLogo;
 
+      // Discord limiti: secrets (party/join) AYNI ANDA buttons ile GONDERILEMEZ
+      // ("secrets cannot currently be sent with buttons") -> tamamini reddederdi.
+      // Etkilesim butonlarda; party/join secret'lari bilincli olarak yoktur.
       const buttons: { label: string; url: string }[] = [
-        { label: '✨ Lupin Music • Dinle', url: `https://lupinmusic.vercel.app/play?id=${track.id}` },
-        { label: '👥 Birlikte Dinle (Party)', url: `https://lupinmusic.vercel.app/party?id=${track.id}&t=${Math.floor(currentTime)}` }
+        { label: '✨ Dinle • Lupin Music', url: `https://lupinmusic.vercel.app/play?id=${track.id}` },
+        { label: '👥 Birlikte Dinle', url: `https://lupinmusic.vercel.app/party?id=${track.id}&t=${Math.floor(currentTime)}` }
       ];
 
-      // Standart setActivity (Type 0 = Playing) + Spotify-tarzı Party & Birlikte Dinle desteği!
       const activityPayload: any = {
         details: safeTitle,
-        state: safeArtist,
+        state: safeState,
         startTimestamp,
         endTimestamp,
         largeImageKey: largeImage,
-        largeImageText: (track.album || track.title || 'Lupin Music • Ultra Luxury Sound').slice(0, 128),
+        largeImageText: (album || track.title || 'Lupin Music').slice(0, 128),
         smallImageKey: defaultLogo,
-        smallImageText: isPlaying ? 'Çalıyor • Lupin Music' : 'Duraklatıldı',
+        smallImageText: isPlaying ? 'Çalıyor • Lupin Music' : 'Duraklatıldı • Lupin Music',
         instance: false,
-        partyId: `lupin_${track.id}`,
-        partySize: 1,
-        partyMax: 10,
-        joinSecret: `lupin_party_${track.id}`,
         buttons
       };
 
+      const trackId = track.id;
       this.rpc.setActivity(activityPayload).then(() => {
-        console.log(`[DiscordRPC] 🎵 Activity updated: "${safeTitle}" - ${safeArtist} (${status})`);
+        this.lastSentTrackId = trackId;
+        this.lastSentStatus = status;
+        this.lastSentCurrentTime = currentTime;
+        this.lastSentDuration = track.duration || 0;
+        console.log(`[DiscordRPC] 🎵 Activity updated: "${safeTitle}" - ${safeState} (${status})`);
       }).catch((e: any) => {
         console.warn('[DiscordRPC] setActivity failed:', e?.message || e);
       });
