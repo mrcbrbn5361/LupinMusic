@@ -289,52 +289,60 @@ export class InnerTubeService {
     return fallback.songs.slice(0, 24);
   }
 
+  private parseRelatedPanel(data: any, videoId: string): Song[] {
+    const tabs = data?.contents?.singleColumnMusicWatchNextResultsRenderer?.tabbedRenderer?.watchNextTabbedResultsRenderer?.tabs;
+    const queueRenderer = tabs?.[0]?.tabRenderer?.content?.musicQueueRenderer;
+    const playlistPanel = queueRenderer?.content?.playlistPanelRenderer;
+    const items = playlistPanel?.contents || data?.continuationContents?.playlistPanelContinuation?.contents || [];
+
+    const songs: Song[] = [];
+    for (const item of items) {
+      const r = item?.playlistPanelVideoRenderer;
+      if (!r || !r.videoId) continue;
+      if (r.videoId === videoId) continue; // Çalmakta olan şarkıyı atla
+
+      const title = this.getText(r.title) || 'Lupin Track';
+      let artist = this.getText(r.longBylineText) || this.getText(r.shortBylineText) || 'Lupin Audio';
+      if (artist) {
+        const parts = artist.split(/[•·]/).map((p: string) => p.trim()).filter(Boolean);
+        artist = parts[0] || artist;
+      }
+
+      const durStr = this.getText(r.lengthText);
+      const duration = this.parseDuration(durStr);
+      const thumbs = r.thumbnail?.thumbnails;
+      const thumbnail = this.getThumbnail(thumbs);
+
+      songs.push({
+        id: r.videoId,
+        title,
+        artist,
+        thumbnail: thumbnail || `https://i.ytimg.com/vi/${r.videoId}/hqdefault.jpg`,
+        duration,
+        durationFormatted: duration > 0 ? this.formatDuration(duration) : (durStr || '--:--')
+      });
+    }
+    return songs;
+  }
+
   public async getRelatedTracks(videoId: string): Promise<Song[]> {
     if (!videoId) return [];
-    try {
-      const data: any = await this.request('next', {
-        videoId,
-        isAudioOnly: true
-      });
 
-      const tabs = data?.contents?.singleColumnMusicWatchNextResultsRenderer?.tabbedRenderer?.watchNextTabbedResultsRenderer?.tabs;
-      const queueRenderer = tabs?.[0]?.tabRenderer?.content?.musicQueueRenderer;
-      const playlistPanel = queueRenderer?.content?.playlistPanelRenderer;
-      const items = playlistPanel?.contents || data?.continuationContents?.playlistPanelContinuation?.contents || [];
-
-      const songs: Song[] = [];
-      for (const item of items) {
-        const r = item?.playlistPanelVideoRenderer;
-        if (!r || !r.videoId) continue;
-        if (r.videoId === videoId) continue; // Çalmakta olan şarkıyı atla
-
-        const title = this.getText(r.title) || 'Lupin Track';
-        let artist = this.getText(r.longBylineText) || this.getText(r.shortBylineText) || 'Lupin Audio';
-        if (artist) {
-          const parts = artist.split(/[•·]/).map((p: string) => p.trim()).filter(Boolean);
-          artist = parts[0] || artist;
-        }
-
-        const durStr = this.getText(r.lengthText);
-        const duration = this.parseDuration(durStr);
-        const thumbs = r.thumbnail?.thumbnails;
-        const thumbnail = this.getThumbnail(thumbs);
-
-        songs.push({
-          id: r.videoId,
-          title,
-          artist,
-          thumbnail: thumbnail || `https://i.ytimg.com/vi/${r.videoId}/hqdefault.jpg`,
-          duration,
-          durationFormatted: duration > 0 ? this.formatDuration(duration) : (durStr || '--:--')
+    // Tohuma ozel YouTube Music radyo listesi: bos 'next' istegi yalnizca calan
+    // parcai donerir (ayni sabit fallback listesine yol acardi); playlistId
+    // (RDAMVM<id>) benzer tarz parcalari getirir. Bos donerse RD<id> denenir.
+    for (const playlistId of [`RDAMVM${videoId}`, `RD${videoId}`]) {
+      try {
+        const data: any = await this.request('next', {
+          videoId,
+          playlistId,
+          isAudioOnly: true
         });
+        const songs = this.parseRelatedPanel(data, videoId);
+        if (songs.length > 0) return songs;
+      } catch (err) {
+        console.warn('[InnerTube] getRelatedTracks error:', err);
       }
-
-      if (songs.length > 0) {
-        return songs;
-      }
-    } catch (err) {
-      console.warn('[InnerTube] getRelatedTracks error:', err);
     }
 
     // Fallback: Eğer next boş dönerse popüler parçalardan yedek liste getir
