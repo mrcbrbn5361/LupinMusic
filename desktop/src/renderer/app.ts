@@ -267,7 +267,10 @@ function appendRadioTracks(tracks: Track[]): number[] {
     for (const i of shuffled(added)) shuffleOrder.push(i);
   }
   trimQueueHead();
-  if (added.length > 0) renderQueueList();
+  if (added.length > 0) {
+    console.log(`[Player] radio +${added.length} (queue=${currentQueue.length})`);
+    renderQueueList();
+  }
   return added;
 }
 
@@ -290,6 +293,7 @@ async function attachRadio(seed: Track, gen: number): Promise<void> {
   const fresh = await fetchRelatedFresh(seed.id);
   if (gen !== radioGen) return;
   if (!currentQueue.some(t => t.id === seed.id)) return;
+  if (fresh.length === 0) console.warn('[Player] radio fetch empty for', seed.id);
   appendRadioTracks(fresh);
 }
 
@@ -482,7 +486,24 @@ function updatePlayPauseUI() {
  * degilse siradaki parcaya gecer. Sonda: tekrar-tumu basa doner,
  * tekrar-kapaliysa radyo bir kez uzatilir, o da olmazsa durur.
  */
+// Sona seek edildiginde motor poll'u bitisi kacirabilir (YT autonav hemen
+// yabanci videoya atlarsa stale maske pstate 0'i gizler): seek hedefi son
+// saniyedeyse kisa bir yedek zamanlayici ilerlemeyi garantiye alir.
+let seekEndWatch: number | null = null;
+function armSeekEndWatch(): void {
+  if (seekEndWatch) window.clearTimeout(seekEndWatch);
+  const trackId = currentTrack?.id || '';
+  seekEndWatch = window.setTimeout(() => {
+    seekEndWatch = null;
+    if (isTrackEnding || userPaused || !trackId) return;
+    if ((currentTrack?.id || '') !== trackId) return;
+    console.log('[Player] seek-end fallback advance (poll missed the end)');
+    advance(true).catch(() => {});
+  }, 2200);
+}
+
 async function advance(auto: boolean) {
+  if (seekEndWatch) { window.clearTimeout(seekEndWatch); seekEndWatch = null; }
   if (currentQueue.length === 0) return;
 
   if (auto && repeatMode === 'one' && currentTrack) {
@@ -498,6 +519,7 @@ async function advance(auto: boolean) {
   }
 
   let next = orderedNextIndex();
+  console.log(`[Player] advance(auto=${auto}) queue=${currentQueue.length} idx=${currentIndex} next=${next} repeat=${repeatMode} shuffle=${isShuffled}`);
   if (next === -1) {
     if (repeatMode === 'all') {
       next = isShuffled ? (shuffleOrder[0] ?? 0) : 0;
@@ -732,6 +754,7 @@ progressBar.addEventListener('click', (e: MouseEvent) => {
     progressFill.style.width = `${ratio * 100}%`;
     pendingSeek = { t: target, at: Date.now() };
     window.api?.seek?.(target);
+    if (target >= currentDuration - 1.5) armSeekEndWatch();
   }
 });
 
@@ -1241,6 +1264,7 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
       const t = Math.min(currentDuration, currentTime + 5);
       pendingSeek = { t, at: Date.now() };
       window.api?.seek(t);
+      if (t >= currentDuration - 1.5) armSeekEndWatch();
     }
   } else if (code === 'ArrowUp') {
     e.preventDefault();

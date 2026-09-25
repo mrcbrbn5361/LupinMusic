@@ -1,4 +1,4 @@
-import { BrowserWindow, session } from 'electron';
+import { app, BrowserWindow, session } from 'electron';
 
 const MUSIC_PARTITION = 'persist:lupin_music';
 const WATCH_URL = 'https://music.youtube.com/watch?v=';
@@ -165,12 +165,15 @@ const ADBLOCK_INJECTION_JS = `(() => {
         }
 
         // Duraklatilmis icerige asla dokunma: seek/speed degisimi "sarki bitti"
-        // sinyali uretip kendiliginden sira ilerlemesine yol acmasin
+        // sinyali uretip kendiliginden sira ilerlemesine yol acmasin.
+        // SURE KORUMASI: sarki basindaki gecici ad-sinyali uzun icerigi sessize
+        // almasin/sona sarmasIN — mute dahil her sey yalnizca KISA (<120sn) videoda.
         if (v && isAdNow && !v.paused && !v.ended) {
-          v.muted = true;
-          if (v.duration && !isNaN(v.duration) && v.duration > 0 && v.duration < 120) {
+          const vd2 = v.duration;
+          if (vd2 && !isNaN(vd2) && vd2 > 0 && vd2 < 120) {
+            v.muted = true;
             v.playbackRate = 16;
-            v.currentTime = v.duration;
+            v.currentTime = vd2;
           }
         }
       } catch {}
@@ -271,14 +274,20 @@ const RESOLVE_MEDIA_JS = `(() => {
     const hasApi = !!(mp && typeof mp.getPlayerState === 'function');
 
     if (hasApi) {
-      let isAd = false;
-      try { if (typeof mp.getAdState === 'function' && mp.getAdState() === 1) isAd = true; } catch {}
-      if (!isAd && mp.classList && (mp.classList.contains('ad-showing') || mp.classList.contains('ad-interrupting'))) isAd = true;
+      let rawAd = false;
+      let adSignal = '';
+      try { if (typeof mp.getAdState === 'function' && mp.getAdState() === 1) { rawAd = true; adSignal = 'adState=1'; } } catch {}
+      if (!rawAd && mp.classList && (mp.classList.contains('ad-showing') || mp.classList.contains('ad-interrupting'))) {
+        rawAd = true;
+        adSignal = mp.classList.contains('ad-showing') ? 'cls:ad-showing' : 'cls:ad-interrupting';
+      }
       // Yedek sinyal: gorunur reklam overlay elementi (gizli DOM kalintilarini sayma)
-      if (!isAd) {
+      // DIKKAT: bu blok executeJavaScript STRING'idir — TS sozdizimi (as, <T>) YAZILAMAZ,
+      // tarayicida SyntaxError tum RESOLVE'u oldurur (2026-09-25 kok nedeni).
+      if (!rawAd) {
         try {
           const ov = document.querySelector('.ytp-ad-player-overlay, .ytp-ad-image-overlay');
-          if (ov && (ov as HTMLElement).offsetParent !== null) isAd = true;
+          if (ov && ov.offsetParent !== null) { rawAd = true; adSignal = 'overlay'; }
         } catch {}
       }
 
@@ -303,6 +312,15 @@ const RESOLVE_MEDIA_JS = `(() => {
         }
       }
 
+      // SURE KORUMASI (2026-09-25): reklam siniflari/API'si sarki BASINDA gecici
+      // olarak takiliyordu; isIcegi gercek sarkiya sona sariyordu (kayit: ad-skip
+      // seek dur=280/328/346). Gercek reklam video elementinde KISA (<120sn)
+      // gorunur; sinyal + kisa sure birlikte = reklam. Uzun surede sinyal ne olursa
+      // olsun reklam sayilmaz, mute/seek asla uygulanmaz.
+      let vdur = 0;
+      if (v && v.duration > 0 && isFinite(v.duration)) vdur = v.duration;
+      else if (dur > 0 && isFinite(dur)) vdur = dur;
+      const isAd = rawAd && vdur > 0 && vdur < 120;
       const apiVid = (vd && (vd.video_id || vd.videoId)) || '';
       let urlObjVid = '';
       try {
@@ -374,6 +392,7 @@ const RESOLVE_MEDIA_JS = `(() => {
         paused: pstate !== 1,
         playerState: pstate,
         isAd,
+        adSignal: rawAd ? (adSignal + '|vdur=' + vdur) : '',
         videoId: vid || '',
         title: title || '',
         artist: artist || '',
@@ -428,6 +447,8 @@ export interface PlaybackState {
   thumbnail?: string;
   /** true ise o an reklam oynuyor; UI adopt/ilerleme bu bayraga gore donar */
   isAd?: boolean;
+  /** Ham reklam sinyalinin kaynagi (tanim disi: adState/cls/overlay + vdur); yalnizca tanilik */
+  adSignal?: string;
 }
 
 export class AudioEngine {
@@ -456,6 +477,12 @@ export class AudioEngine {
   private switchRetryCount: number = 0;
   private coldReloadDone: boolean = false;
   private resolveFailStreak: number = 0;
+  private lastSnapBackAt: number = 0;
+  private currentEnded: boolean = false;
+  private endPending: boolean = false;
+  private endReported: boolean = false;
+  private lastOursDur: number = 0;
+  private lastRawAdSignal: string = '';
   // Hizli baslatma (fast-path): YT oynatici hazir olana kadar dogrudan akisla cal
   private fastAudio: boolean = false;
   private fastMeta: { title?: string; artist?: string; thumbnail?: string; duration?: number } = {};
@@ -470,7 +497,13 @@ export class AudioEngine {
   }
 
   constructor() {
-    this.setupSession();
+    // session.fromPartition app.ready ister; modul yuklemesinde erken kurulursa
+    // Session setup error verip ag-reklam-blokmani sessizce olur birakirdi.
+    if (app.isReady()) {
+      this.setupSession();
+    } else {
+      app.whenReady().then(() => this.setupSession()).catch(() => {});
+    }
   }
 
   /** Reklam engelleyiciyi ac/kapat (ag blok + sayfa ici atlama). */
@@ -653,6 +686,7 @@ export class AudioEngine {
     // Araya yeni parca girdiyse bu koprunun hukum kalmadi: yeni holder'a dokunma
     if (gen !== this.playGen || vid !== this.currentVideoId) return 'settle';
     if (!f || !f.ok || f.error) {
+      console.log(`[AudioEngine] fast-path stream lost (err=${f?.error || 'no-element'}) -> YT fallback`);
       // Akis oldu: YT'ye don (akisi cache'den dusur)
       this.streamCache.delete(this.currentVideoId);
       await this.stopFastElement();
@@ -664,6 +698,7 @@ export class AudioEngine {
     if (gen !== this.playGen || vid !== this.currentVideoId) return 'settle';
     if (yt && yt.ok && yt.videoId === this.currentVideoId && Number(yt.duration) > 0) {
       const pos = Math.max(0, Number(f.cur) || 0);
+      console.log(`[AudioEngine] fast-path settle at ${pos.toFixed(2)}s (yt ready)`);
       await this.settleFastPath(pos);
       return 'settle';
     }
@@ -707,9 +742,11 @@ export class AudioEngine {
 
   private setupSession(): void {
     if (this.adblockInstalled) return;
-    this.adblockInstalled = true;
     try {
       const ses = session.fromPartition(MUSIC_PARTITION);
+      // Flag yalnizca session alindiktan sonra konur: once konursa basarisiz
+      // kurulum (app.ready oncesi) tekrar denenemezdi.
+      this.adblockInstalled = true;
 
       // 1. Google/YouTube reklam domainlerini iptal et (kapatilabilir)
       ses.webRequest.onBeforeRequest({ urls: AD_BLOCK_PATTERNS }, (_details, cb) => {
@@ -840,6 +877,10 @@ export class AudioEngine {
     this.switchRetryCount = 0;
     this.coldReloadDone = false;
     this.resolveFailStreak = 0;
+    this.currentEnded = false;
+    this.endPending = false;
+    this.endReported = false;
+    this.lastOursDur = 0;
     this.shouldPlay = true;
     this.fastMeta = {
       title: meta?.title || 'Lupin Music',
@@ -1089,29 +1130,100 @@ export class AudioEngine {
         // - onaylanmadan gorulen yabanci id (bayat yanki) benimsenmez.
         const isRecentUserSwitch = Date.now() - this.lastPlayAt < 3000;
         const stateVid = state.videoId || '';
+        let forceEnd = false;
 
         if (stateVid && stateVid === this.currentVideoId) {
+          if (!this.idConfirmed) {
+            console.log(`[AudioEngine] ✓ id confirmed: ${stateVid} after ${Date.now() - this.lastPlayAt}ms`);
+          }
           this.idConfirmed = true;
           this.idCandidate = '';
           this.idStreak = 0;
+          if (dur > 0) this.lastOursDur = dur;
+          if (dur > 0 && cur > 0 && cur >= dur - 1.0) {
+            // Bitis bolgesi goruldu: sonraki poll'da yabanci id gelse bile
+            // "sarki bitti" bilgisi kaybolmasin (ilerleme renderer'in isidir)
+            if (!this.endPending) {
+              console.log(`[AudioEngine] endPending set: cur=${cur.toFixed(2)} dur=${dur.toFixed(2)} pstate=${pstate} vid=${stateVid}`);
+            }
+            this.endPending = true;
+          }
+          if (this.endPending && pstate === 0) {
+            this.currentEnded = true;
+            this.endReported = true; // bitis raporu dogal yoldan gitti
+          } else if (this.endPending && !this.endReported && dur > 0 && cur >= dur - 0.5 && pstate !== 0) {
+            // Bitiste pstate0 poll'u kacti (hemen post-roll reklam basladi):
+            // sure tam sondayken bitis raporunu burada zorla (bir kez).
+            this.currentEnded = true;
+            this.endReported = true;
+            forceEnd = true;
+          } else if (!this.endReported && this.endPending && cur < dur - 2 && dur > 0) {
+            this.endPending = false; // kullanici geri sardi: bitis sayilmaz
+          }
         } else if (stateVid && (stateVid === this.replacedVideoId || !this.idConfirmed)) {
           // Bayat yanki ya da onaylanmamis gecisteki yabanci id: ele
           this.idCandidate = '';
           this.idStreak = 0;
         } else if (stateVid && state.isAd !== true) {
-          // Disaridan gercek degisim (radio vb.): 2 art arda dogrulamada benimse
-          // (reklam videonun id'si asla parca sanilmaz)
-          if (stateVid === this.idCandidate) {
-            this.idStreak += 1;
+          if (this.endPending || this.endReported) {
+            // Bizim parca bitti: YT autonav'i yalnizca susturulur (tekrar
+            // baslamasin), ilerleme + sira renderer'dir. Bitis raporu bir kez.
+            if (!this.endReported) {
+              this.endReported = true;
+              this.currentEnded = true;
+              forceEnd = true;
+            }
+            console.log(`[AudioEngine] ↩ autonav silenced after end: ${stateVid} (raw cur=${cur.toFixed(2)} dur=${dur.toFixed(2)} pstate=${pstate} endPending=${this.endPending})`);
+            this.win?.webContents.executeJavaScript(`(() => {
+              try {
+                const mp = document.getElementById('movie_player') || window.__hmp;
+                if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
+                const v = document.querySelector('video');
+                if (v) v.pause();
+              } catch {}
+            })()`, true).catch(() => {});
           } else {
-            this.idCandidate = stateVid;
-            this.idStreak = 1;
-          }
-          if (this.idStreak >= 2) {
-            this.replacedVideoId = this.currentVideoId;
-            this.currentVideoId = stateVid;
-            this.idCandidate = '';
-            this.idStreak = 0;
+            // YABANCI id (parca ortasinda): YT up-next/radyo autonav kendi
+            // kendine video yukledi. Benimseme YOK — 2 poll teyit + 1.5sn
+            // rate-limit ile kendi parcaya snap-back donulur.
+            if (stateVid === this.idCandidate) {
+              this.idStreak += 1;
+            } else {
+              this.idCandidate = stateVid;
+              this.idStreak = 1;
+            }
+            if (this.idStreak >= 2 && Date.now() - this.lastSnapBackAt > 1500) {
+              this.lastSnapBackAt = Date.now();
+              this.idCandidate = '';
+              this.idStreak = 0;
+              if (!this.shouldPlay) {
+                console.log(`[AudioEngine] ↩ autonav silenced (paused): ${stateVid}`);
+                this.win?.webContents.executeJavaScript(`(() => {
+                  try {
+                    const mp = document.getElementById('movie_player') || window.__hmp;
+                    if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
+                    const v = document.querySelector('video');
+                    if (v) v.pause();
+                  } catch {}
+                })()`, true).catch(() => {});
+              } else {
+                console.log(`[AudioEngine] ↩ autonav rejected: ${stateVid} -> snap back to ${this.currentVideoId}`);
+                const snapTo = JSON.stringify(this.currentVideoId);
+                this.win?.webContents.executeJavaScript(`(() => {
+                  try {
+                    window.__lupin_should_play = true;
+                    const mp = document.getElementById('movie_player') || window.__hmp;
+                    if (mp && typeof mp.loadVideoById === 'function') {
+                      if (typeof mp.setAutonav === 'function') { try { mp.setAutonav(false); } catch {} }
+                      mp.loadVideoById(${snapTo});
+                      if (typeof mp.playVideo === 'function') mp.playVideo();
+                      const v = document.querySelector('video');
+                      if (v) { v.playbackRate = 1; v.muted = false; v.play().catch(() => {}); }
+                    }
+                  } catch {}
+                })()`, true).catch(() => {});
+              }
+            }
           }
         } else {
           this.idCandidate = '';
@@ -1132,6 +1244,13 @@ export class AudioEngine {
           if (pstate === 0) pstate = 3;
         }
 
+        // Bitis raporu (bir kez): son poll'da yabanci id'ye atlansa bile
+        // renderer "sarki bitti" (pstate 0 + son konum) gorur ve ilerler.
+        if (forceEnd) {
+          pstate = 0;
+          cur = this.lastOursDur || (Number(this.fastMeta.duration) || dur);
+        }
+
         // Gecis takildiysa (id henuz onaylanmadi): once sicak tekrar, sonra tam
         // yeniden yukleme ile kendini toparla. Boylece "sure baslamiyor / eski
         // sarkiya donme" durumu 4-9 sn icinde kendiliginden iyilesir.
@@ -1139,6 +1258,7 @@ export class AudioEngine {
           const waited = Date.now() - this.lastPlayAt;
           if (waited > 4000 + this.switchRetryCount * 2500 && this.switchRetryCount < 2) {
             this.switchRetryCount += 1;
+            console.log(`[AudioEngine] switch retry #${this.switchRetryCount} after ${waited}ms (stateVid=${stateVid || 'none'}, pstate=${pstate}, cur=${cur.toFixed(2)}, dur=${dur.toFixed(2)})`);
             const vidRetry = JSON.stringify(this.currentVideoId);
             this.win?.webContents.executeJavaScript(`(() => {
               try {
@@ -1156,6 +1276,7 @@ export class AudioEngine {
             })()`, true).catch(() => {});
           } else if (waited > 9000 && !this.coldReloadDone) {
             this.coldReloadDone = true;
+            console.log(`[AudioEngine] cold reload after ${waited}ms (stateVid=${stateVid || 'none'})`);
             const genReload = this.playGen;
             const vidReload = this.currentVideoId;
             this.win?.webContents.loadURL(`${WATCH_URL}${encodeURIComponent(vidReload)}`).then(async () => {
@@ -1170,10 +1291,11 @@ export class AudioEngine {
           }
         }
 
-        // Erken 'ended' (playerState 0) koruması:
-        // YALNIZCA şarkı başlangıcında (ilk 2.5 sn) geçici bir durum oluştuysa oynatmayı devam ettir.
-        // Gerçek şarkı bittiğinde pstate 0 olarak kalmalı ki sıradaki şarkıya geçilsin.
-        if (pstate === 0 && dur > 10 && cur < 2 && isRecentUserSwitch) {
+        // Erken 'ended'/'paused' (playerState 0 veya 2) korumasi:
+        // YALNIZCA sarki baslangicinda (ilk 2.5 sn) henuz baslamamis oynatici
+        // 'bitti/durakladi' sanilmasin: gecis sayilir, play poke gonderilir.
+        // Gercek sarki bittiginde pstate 0 olarak kalmali ki siradakine gecilsin.
+        if ((pstate === 0 || pstate === 2) && dur > 10 && cur < 2 && isRecentUserSwitch) {
           pstate = 3; // Buffering / geçiş
           if (this.shouldPlay) {
             this.win?.webContents.executeJavaScript(`(() => {
@@ -1203,11 +1325,19 @@ export class AudioEngine {
 
         const isPaused = !this.shouldPlay || (state.paused && pstate === 2) || pstate === 0;
         const isAd = state.isAd === true;
+        if ((state.adSignal || '') !== this.lastRawAdSignal) {
+          this.lastRawAdSignal = state.adSignal || '';
+          if (this.lastRawAdSignal) {
+            console.log(`[AudioEngine] ad raw signal: ${this.lastRawAdSignal} (gated isAd=${isAd} cur=${cur.toFixed(2)} dur=${dur.toFixed(2)})`);
+          }
+        }
 
         // Reklam savunmasi: art arda dogrulanan reklamda sesi motor seviyesinde kes
         // ve reklami sonuna sar (sarki suresi ne olursa olsun; gercek icerige dokunulmaz
         // cunku yalnizca isAd bayragi kalkmayinca devreye girer).
-        if (isAd && this.adblockEnabled) {
+        if (isAd && this.adblockEnabled && Date.now() - this.lastPlayAt > 3000) {
+          // Grace: gecis/ilk-baslangic pencerelerinde (<=3sn) reklam sinyalleri
+          // gecici takiliyor; motorun mute/seek'i bu pencerede ASLA dokunmaz.
           if (!this.engineMuted) {
             this.engineMuted = true;
             try { this.win?.webContents.setAudioMuted(true); } catch {}
@@ -1215,16 +1345,18 @@ export class AudioEngine {
           const streakKey = state.videoId || this.currentVideoId;
           this.adStreak = (this.adStreakKey === streakKey) ? this.adStreak + 1 : 1;
           this.adStreakKey = streakKey;
+          if (this.adStreak === 2) {
+            console.log(`[AudioEngine] ad detected: vid=${streakKey} cur=${cur.toFixed(2)} dur=${dur.toFixed(2)} pstate=${pstate} stateVid=${stateVid} signal=${state.adSignal || ''}`);
+          }
           if (this.adStreak >= 2 && this.adSeeks < 3 && dur > 0) {
             this.adSeeks += 1;
+            console.log(`[AudioEngine] ad-skip seek #${this.adSeeks} (dur=${dur.toFixed(2)})`);
             this.win?.webContents.executeJavaScript(`(() => {
               try {
-                const mp = document.getElementById('movie_player') || window.__hmp;
-                if (mp && typeof mp.seekTo === 'function' && typeof mp.getDuration === 'function') {
-                  const d = mp.getDuration();
-                  if (d > 0) mp.seekTo(d, true);
-                }
                 const v = document.querySelector('video');
+                // DIKKAT: mp.seekTo YAPILMAZ — reklam slotunda mp API içerik
+                // zaman cizelgesine yazar (sarkiyi 20sn'ye geri sariyordu).
+                // Reklam kisa surede bitirilir; içerik timeline'ina dokunulmaz.
                 if (v && v.duration > 0) { v.muted = true; v.playbackRate = 16; v.currentTime = v.duration; }
               } catch {}
             })()`, true).catch(() => {});

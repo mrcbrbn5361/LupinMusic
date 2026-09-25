@@ -250,10 +250,10 @@ export class DiscordRpcManager {
 
       // Discord limiti: secrets (party/join) AYNI ANDA buttons ile GONDERILEMEZ
       // ("secrets cannot currently be sent with buttons") -> tamamini reddederdi.
-      // Etkilesim butonlarda; party/join secret'lari bilincli olarak yoktur.
+      // Etkilesim butonlarda (Dinle + Discord daveti); GitHub linki hover metninde.
       const buttons: { label: string; url: string }[] = [
         { label: '✨ Dinle • Lupin Music', url: `https://lupinmusic.vercel.app/play?id=${track.id}` },
-        { label: '👥 Birlikte Dinle', url: `https://lupinmusic.vercel.app/party?id=${track.id}&t=${Math.floor(currentTime)}` }
+        { label: '💜 Discord Sunucusu', url: 'https://discord.gg/Rma8w8JrQH' }
       ];
 
       const activityPayload: any = {
@@ -262,7 +262,7 @@ export class DiscordRpcManager {
         startTimestamp,
         endTimestamp,
         largeImageKey: largeImage,
-        largeImageText: (album || track.title || 'Lupin Music').slice(0, 128),
+        largeImageText: `${(album || track.title || 'Lupin Music').slice(0, 60)} • github.com/mrcbrbn5361/LupinMusic`.slice(0, 128),
         smallImageKey: defaultLogo,
         smallImageText: isPlaying ? 'Çalıyor • Lupin Music' : 'Duraklatıldı • Lupin Music',
         instance: false,
