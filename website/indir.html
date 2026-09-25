@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>İndir — Lupin Music | Windows ve macOS</title>
+  <meta name="description" content="Lupin Music'i ücretsiz indir: Windows kurulum sihirbazı, taşınabilir portable sürüm ve macOS için deneysel yapım." />
+  <meta name="theme-color" content="#090214" />
+  <link rel="icon" type="image/png" href="/logo.png" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Lupin Music" />
+  <meta property="og:title" content="Lupin Music — Ücretsiz İndir" />
+  <meta property="og:description" content="Birkaç saniyede kur, hemen çal. Windows 10/11, portable ve macOS." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="/"><img src="/logo.png" alt="Lupin Music logosu" /> Lupin Music <span class="beta">BETA</span></a>
+      <nav class="nav-links">
+        <a href="/ozellikler">Özellikler</a>
+        <a href="/birlikte">Birlikte Dinle</a>
+        <a href="/indir" class="active">İndir</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="btn btn-ghost" href="https://github.com/mrcbrbn5361/LupinMusic" target="_blank" rel="noopener">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/mrcbrbn5361/LupinMusic/releases" target="_blank" rel="noopener">Ücretsiz İndir</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="page-hero">
+      <div class="container" style="text-align:center; display:flex; flex-direction:column; align-items:center;">
+        <span class="eyebrow reveal">İndir</span>
+        <h1 class="section-title reveal">Birkaç saniyede <span class="grad">kur</span>, hemen çal.</h1>
+        <p class="section-sub reveal" style="text-align:center;">Ücretsiz, açık kaynak, hesap gerektirmez.</p>
+      </div>
+    </section>
+
+    <section class="section" style="padding-top: 10px;">
+      <div class="container">
+        <div class="download-grid" style="margin-top: 0;">
+          <div class="dl-card reveal">
+            <div class="ico">🪟</div>
+            <h3>Windows Kurulum</h3>
+            <p>Windows 10/11 için NSIS kurulum sihirbazı. Tek tıkla yüklenir, lupin:// derin bağlantıları kurulumla birlikte tescil edilir.</p>
+            <a class="btn btn-primary" href="https://github.com/mrcbrbn5361/LupinMusic/releases" target="_blank" rel="noopener">Setup (.exe) İndir</a>
+          </div>
+          <div class="dl-card reveal">
+            <div class="ico">🚀</div>
+            <h3>Taşınabilir Sürüm</h3>
+            <p>Kurulum yok — tek dosya, aç çalıştır. USB'den bile çalışır; aynı özellikler, aynı motor.</p>
+            <a class="btn btn-ghost" href="https://github.com/mrcbrbn5361/LupinMusic/releases" target="_blank" rel="noopener">Portable İndir</a>
+          </div>
+          <div class="dl-card reveal">
+            <div class="ico">🍎</div>
+            <h3>macOS</h3>
+            <p>Apple Silicon ve Intel için deneysel yapım. CI her sürümde macOS paketini de üretir.</p>
+            <a class="btn btn-ghost" href="https://github.com/mrcbrbn5361/LupinMusic/releases" target="_blank" rel="noopener">macOS Sürümü</a>
+          </div>
+        </div>
+
+        <p class="dl-note reveal">
+          Tüm sürümler <a href="https://github.com/mrcbrbn5361/LupinMusic/releases" target="_blank" rel="noopener">GitHub Releases</a> üzerinden dağıtılır • MIT lisansı
+        </p>
+
+        <div class="next-links reveal">
+          <a class="btn btn-ghost" href="/birlikte">🎧 Önce Birlikte Dinle'ye bak</a>
+          <a class="btn btn-ghost" href="/ozellikler">Özellikleri incele</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-inner">
+        <a class="brand" href="/"><img src="/logo.png" alt="" /> Lupin Music</a>
+        <div class="footer-links">
+          <a href="/ozellikler">Özellikler</a>
+          <a href="/birlikte">Birlikte Dinle</a>
+          <a href="/indir">İndir</a>
+          <a href="https://github.com/mrcbrbn5361/LupinMusic" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://discord.gg/Rma8w8JrQH" target="_blank" rel="noopener">Discord</a>
+        </div>
+        <div class="footer-note">
+          © 2026 Lupin Music • Yapay zekâ değil, elle kodlandı 💜 • Bu proje YouTube veya Google LLC ile bağlantılı değildir.
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module" src="/src/landing.ts"></script>
+</body>
+</html>

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Birlikte Dinle — Lupin Music</title>
+  <meta name="description" content="Arkadaşınla aynı şarkıyı aynı saniyede dinle: Lupin Music Birlikte Dinle partileri, lupin:// derin bağlantı ve Discord davet butonu." />
+  <meta name="theme-color" content="#090214" />
+  <link rel="icon" type="image/png" href="/logo.png" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Lupin Music" />
+  <meta property="og:title" content="Lupin Music — Birlikte Dinle Partileri" />
+  <meta property="og:description" content="Tek link, aynı saniye. Arkadaşını partiye davet et." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="/"><img src="/logo.png" alt="Lupin Music logosu" /> Lupin Music <span class="beta">BETA</span></a>
+      <nav class="nav-links">
+        <a href="/ozellikler">Özellikler</a>
+        <a href="/birlikte" class="active">Birlikte Dinle</a>
+        <a href="/indir">İndir</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="btn btn-ghost" href="https://github.com/mrcbrbn5361/LupinMusic" target="_blank" rel="noopener">GitHub</a>
+        <a class="btn btn-primary" href="/indir">Ücretsiz İndir</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="page-hero">
+      <div class="container">
+        <span class="eyebrow reveal">🎧 Birlikte Dinle</span>
+        <h1 class="section-title reveal">Aynı şarkıyı, <span class="grad">aynı saniyede</span>.</h1>
+        <p class="section-sub reveal">
+          Çalan şarkının konumunu paylaş; daveti alan arkadaş Lupin Music'e tek dokunuşla
+          tam o andan katılsın. Discord'a yapıştır, webhook ile kanala gönder ya da linki kopyala.
+        </p>
+      </div>
+    </section>
+
+    <section class="section" style="padding-top: 10px;">
+      <div class="container party-split">
+        <div class="party-copy reveal">
+          <h2 class="section-title" style="font-size: clamp(26px,3vw,34px);">3 adımda parti</h2>
+          <ul class="checks">
+            <li><span class="tick">1</span> <span><b style="color:#fff">Dinle</b> — Lupin Music'te herhangi bir şarkıyı çal.</span></li>
+            <li><span class="tick">2</span> <span><b style="color:#fff">Davet et</b> — Bağlantıyı kopyala ya da Discord bot kartındaki <b style="color:#fff">🎧 Birlikte Dinle</b> butonunu kullan.</span></li>
+            <li><span class="tick">3</span> <span><b style="color:#fff">Katıl</b> — Arkadaşın linki açtığında <code style="color:#d946ef">lupin://</code> uygulamayı açar ve aynı saniyeden devam eder.</span></li>
+          </ul>
+
+          <h3 class="reveal" style="margin-top: 34px; font-size: 19px;">Davet linki nasıl görünür?</h3>
+          <p class="reveal" style="margin-top: 10px; font-size: 15px; color: var(--muted);">
+            Şarkı adı, sanatçı ve tam konum <code style="color:#d946ef">2:28 / 3:03</code> davette taşınır;
+            link kapalı uygulamada bile çalışır — soğuk başlatmada bile konum korunur.
+          </p>
+
+          <div class="party-ctas reveal" style="margin-top: 26px;">
+            <a class="btn btn-primary" href="/party?id=wFdu5ClMKqg&amp;t=148">🔗 Örnek Partiyi Aç</a>
+            <a class="btn btn-ghost" href="/indir">Uygulamayı İndir</a>
+          </div>
+        </div>
+
+        <div class="discord-card reveal">
+          <div class="discord-msg">
+            <div class="discord-avatar">🎧</div>
+            <div>
+              <div class="discord-name">Lupin Music <span>bugün 14:32</span></div>
+              <div class="discord-body">
+                <div>🎧 <strong style="color:#fff">Lupin Music • Birlikte Dinleme Partisi</strong></div>
+                <div class="title-line">🎵 <strong>Aşıklar Deresi</strong> — <em>Dinçer</em></div>
+                <div>⏳ Konum: <span class="pos">2:28 / 3:03</span></div>
+                <div>✨ <a href="/party?id=wFdu5ClMKqg&amp;t=148">Lupin Music'te Katıl</a></div>
+                <div>🔗 <span class="dl">lupin://party?id=wFdu5ClMKqg&amp;t=148</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-inner">
+        <a class="brand" href="/"><img src="/logo.png" alt="" /> Lupin Music</a>
+        <div class="footer-links">
+          <a href="/ozellikler">Özellikler</a>
+          <a href="/birlikte">Birlikte Dinle</a>
+          <a href="/indir">İndir</a>
+          <a href="https://github.com/mrcbrbn5361/LupinMusic" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://discord.gg/Rma8w8JrQH" target="_blank" rel="noopener">Discord</a>
+        </div>
+        <div class="footer-note">
+          © 2026 Lupin Music • Yapay zekâ değil, elle kodlandı 💜 • Bu proje YouTube veya Google LLC ile bağlantılı değildir.
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module" src="/src/landing.ts"></script>
+</body>
+</html>
