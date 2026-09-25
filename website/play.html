@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lupin Music'te Aç</title>
+  <meta name="description" content="Discord'daki Lupin Music şarkısını masaüstü uygulamada aynı saniyeden aç." />
+  <meta name="theme-color" content="#090214" />
+  <link rel="icon" type="image/png" href="/logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="/"><img src="/logo.png" alt="" /> Lupin Music</a>
+      <div class="nav-cta">
+        <a class="btn btn-ghost" href="/">Ana Sayfa</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="page-center">
+    <main class="invite-card">
+      <span class="invite-badge">💜 Discord • Lupin Music</span>
+      <div id="ok">
+        <h1 class="invite-title" id="title">Şarkı masaüstünde açılıyor…</h1>
+        <p class="invite-artist" id="sub">Lupin Music çalara bağlanıyor</p>
+        <div class="invite-actions">
+          <button class="btn btn-primary" id="open" type="button">▶ Lupin Music'te Aç</button>
+          <a class="btn btn-ghost" href="https://github.com/mrcbrbn5361/LupinMusic/releases" target="_blank" rel="noopener">🚀 Uygulamayı İndir</a>
+        </div>
+        <div class="invite-hint" id="hint">
+          <b>Uygulama açılmadı mı?</b><br />
+          Tarayıcı <b>"Masaüstünde aç"</b> diye sorarsa izin ver. Discord profilindeki şarkı Lupin Music çalara
+          zaten bağlıdır — uygulamayı açtığında kaldığın yerden devam eder.
+        </div>
+      </div>
+      <p class="invite-foot">© 2026 Lupin Music • Windows &amp; macOS</p>
+    </main>
+  </div>
+
+  <script type="module" src="/src/play.ts"></script>
+</body>
+</html>

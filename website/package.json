@@ -1,0 +1,15 @@
+{
+  "name": "lupin-music-website",
+  "version": "1.0.0",
+  "description": "Lupin Music resmi web sitesi — landing, Birlikte Dinle parti sayfasi",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "dev:server": "node dev-server.js"
+  },
+  "devDependencies": {
+    "vite": "^5.4.11"
+  }
+}

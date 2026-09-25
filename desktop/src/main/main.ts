@@ -58,14 +58,21 @@ function clearPendingVideoId(): void {
 // Deep Link Protocol (lupin://) and Single Instance Lock
 app.setAsDefaultProtocolClient('lupin');
 
+// Uygulama kapaliyken tiklanan lupin:// linki argv ile gelir; pencere ve
+// renderer hazir olana kadar bekletilir (did-finish-load sonrasi flush).
+let pendingDeepLinkUrl: string | null = null;
+
 function handleDeepLink(rawUrl: string): void {
   try {
     const clean = rawUrl.replace(/^lupin:\/\/?/, 'http://localhost/');
     const parsed = new URL(clean);
     const videoId = parsed.searchParams.get('id') || parsed.searchParams.get('v') || parsed.pathname.replace(/^\//, '');
     const seekTime = Number(parsed.searchParams.get('t')) || 0;
-    if (videoId && mainWindow && !mainWindow.isDestroyed()) {
+    if (!videoId) return;
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
       mainWindow.webContents.send('bot:remote-control', 'playTrack', { id: videoId, seek: seekTime });
+    } else {
+      pendingDeepLinkUrl = rawUrl;
     }
   } catch (e) {
     console.warn('[Main] Deep link parse error:', e);
@@ -192,6 +199,20 @@ function createWindow(): void {
 // App lifecycle
 app.whenReady().then(async () => {
   createWindow();
+
+  // Soğuk-start derin bağlantı: pencere renderer'ı yükleyince bekleyen linki uygula
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      if (pendingDeepLinkUrl) {
+        const url = pendingDeepLinkUrl;
+        pendingDeepLinkUrl = null;
+        handleDeepLink(url);
+      }
+    });
+  }
+  const coldDeepArg = process.argv.find((arg) => arg.startsWith('lupin://'));
+  if (coldDeepArg) handleDeepLink(coldDeepArg);
+
   audioEngine.prewarm();
 
   // Setup AudioEngine updates
