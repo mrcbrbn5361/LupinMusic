@@ -500,6 +500,8 @@ ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Tra
       form.append('payload_json', JSON.stringify({
         username: 'Lupin Music • Birlikte Dinle',
         avatar_url: logoUrl,
+        // Birlikte Dinle linki metin olarak da atilir (kart gorseli tiklanamaz)
+        content: `🎧 **Birlikte Dinle:** ${partyUrl}\n🚀 **Lupin Uygulamasında Aç:** ${playUrl}`,
         components: actionRow([
           { label: '🎧 Birlikte Dinle Partisi', url: partyUrl },
           { label: '🚀 Lupin Uygulamasında Aç', url: playUrl },

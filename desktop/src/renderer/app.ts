@@ -1247,6 +1247,10 @@ window.api?.onRemoteControl?.((action: string, payload?: any) => {
 
 // Keyboard Shortcuts
 window.addEventListener('keydown', (e: KeyboardEvent) => {
+  // Pencere arka planda/fokus degilken kisayollar TETIKLENMEZ: baska uygulamada
+  // yazarken Space/L/N gibi tuslar lupin'e gitmemeli.
+  if (!document.hasFocus() || document.visibilityState === 'hidden') return;
+
   const target = e.target as HTMLElement;
   const isInput = !!(
     target && (
