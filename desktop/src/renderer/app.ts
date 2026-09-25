@@ -1207,10 +1207,13 @@ window.api?.onRemoteControl?.((action: string, payload?: any) => {
     pendingSeek = { t: payload, at: Date.now() };
     window.api?.seek?.(payload);
   } else if (action === 'playTrack' && payload && payload.id) {
+    // Placeholder'lar main + renderer merge guard'lariyla AYNI olmali
+    // ('Lupin Music'/'Lupin Audio'); farkli placeholder'da motor metadatasi
+    // hic birlesmez ve deep-link parcasi 'Lupin Track' olarak kalir.
     const trackToPlay: Track = {
       id: payload.id,
-      title: payload.title || 'Lupin Track',
-      artist: payload.artist || 'Lupin Music',
+      title: payload.title || 'Lupin Music',
+      artist: payload.artist || 'Lupin Audio',
       thumbnail: payload.thumbnail || `https://i.ytimg.com/vi/${payload.id}/hqdefault.jpg`,
       duration: payload.duration || 0
     };

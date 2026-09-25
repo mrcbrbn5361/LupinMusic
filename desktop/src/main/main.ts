@@ -118,7 +118,14 @@ app.on('open-url', (event, url) => {
   handleDeepLink(url);
 });
 
+// Tekrarli cagriyi keser: before-quit / window-all-closed / closed olaylari
+// quitApplication icindeki app.quit() ve destroy() ile yeniden tetikleniyordu
+// (Maximum call stack size exceeded -> ani kapanis).
+let quitting = false;
+
 function quitApplication(): void {
+  if (quitting) return;
+  quitting = true;
   try { audioEngine.destroy(); } catch {}
   try { botServer.stop(); } catch {}
   try { discordRpc.destroy(); } catch {}

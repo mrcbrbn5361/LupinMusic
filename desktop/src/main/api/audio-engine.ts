@@ -337,13 +337,17 @@ const RESOLVE_MEDIA_JS = `(() => {
       let title = '';
       let artist = '';
       const apiDataFresh = !!vd;
-      if (apiDataFresh && vd) {
+      if (vd) {
         title = vd.title || '';
         artist = vd.author || '';
       }
 
-      // Fallback 1: document.title parse
-      if (!title) {
+      // DKKAT: vd tazeyse (var ama bos bile olsa) document.title / player-bar
+      // fallback'ine ASLA dusulmez. Reklam/araya geciste vd.video_id hedefe
+      // gecmisken vd.title bos kalir; o fallback'ler ESKI (prewarm) sayfanin
+      // basligini sizar ve yanlis deger placeholder'i bir kez tuketir.
+      // Taze-vd'de bos baslik bir poll placeholder olarak kalir, sonrasi dogru veriyi alir.
+      if (!apiDataFresh && !title) {
         try {
           const dt = (document.title || '').trim();
           let cleaned = dt.replace(/\\s*[|\\-–]\\s*YouTube Music\\s*$/i, '').trim();
@@ -368,8 +372,8 @@ const RESOLVE_MEDIA_JS = `(() => {
         } catch {}
       }
 
-      // Fallback 2: ytmusic-player-bar DOM
-      if (!title || !artist) {
+      // Fallback 2: ytmusic-player-bar DOM (yalnizca vd yokken)
+      if (!apiDataFresh && (!title || !artist)) {
         try {
           const pb = document.querySelector('ytmusic-player-bar');
           if (pb) {
@@ -478,6 +482,12 @@ export class AudioEngine {
   private coldReloadDone: boolean = false;
   private resolveFailStreak: number = 0;
   private lastSnapBackAt: number = 0;
+  // Baslik gecis korumasi: vid degistigi halde baslik henuz degismemis ise o deger
+  // onceki videonundur; yeni baslik gelene (veya kisa pencereye) kadar kullanilmaz.
+  private lastStateVid: string = '';
+  private lastStateTitle: string = '';
+  private staleTitleValue: string = '';
+  private staleTitleUntil: number = 0;
   private currentEnded: boolean = false;
   private endPending: boolean = false;
   private endReported: boolean = false;
@@ -1371,13 +1381,41 @@ export class AudioEngine {
           }
         }
 
+        // DOM'da baska bir video (prewarm/onceki parca) oynarken state.title
+        // BAYAT olur; isMatchingTrack false iken asla kullanilmaz — yalnizca
+        // fastMeta (gercek baslik) veya placeholder doner. Boylece deep-link'te
+        // placeholder guard bir kez yanlis beslenmez, gercek baslik sonrasi
+        // poll'da normal bilesir.
+        // Gecis sinirinda bayat baslik: vid degistigi halde baslik ayni kalmis
+        // ise o, onceki videonun basligidir (prewarm/onceki parcadan sizar).
+        // Yeni baslik gorulene kadar kullanilmaz; boylece deep-link placeholder
+        // guard'i yanlis degerle bir kez tuketilmez, gercek baslik sonrasi poll'da
+        // normal bilesir. 3sn pencere ayni baslikli iki videoyu kilitlemez.
+        if (stateVid && stateVid !== this.lastStateVid) {
+          if (this.lastStateTitle && state.title && state.title === this.lastStateTitle) {
+            this.staleTitleValue = state.title;
+            this.staleTitleUntil = Date.now() + 3000;
+          }
+          this.lastStateVid = stateVid;
+        }
+        if (state.title && state.title !== this.staleTitleValue) {
+          this.staleTitleValue = '';
+          this.staleTitleUntil = 0;
+        }
+        this.lastStateTitle = state.title || '';
+        const metaStale = Boolean(
+          this.staleTitleValue &&
+          Date.now() < this.staleTitleUntil &&
+          (state.title === this.staleTitleValue || !state.title)
+        );
+
         const isMatchingTrack = Boolean(state.videoId && state.videoId === effectiveVideoId);
-        const resolvedTitle = (isMatchingTrack && state.title && state.title !== 'YouTube Music')
+        const resolvedTitle = (isMatchingTrack && !metaStale && state.title && state.title !== 'YouTube Music')
           ? state.title
-          : (this.fastMeta.title !== 'Lupin Music' ? this.fastMeta.title : (state.title || this.fastMeta.title));
-        const resolvedArtist = (isMatchingTrack && state.artist)
+          : (this.fastMeta.title !== 'Lupin Music' ? this.fastMeta.title : 'Lupin Music');
+        const resolvedArtist = (isMatchingTrack && !metaStale && state.artist)
           ? state.artist
-          : (this.fastMeta.artist !== 'Lupin Audio' ? this.fastMeta.artist : (state.artist || this.fastMeta.artist));
+          : (this.fastMeta.artist !== 'Lupin Audio' ? this.fastMeta.artist : 'Lupin Audio');
         const resolvedThumbnail = (isMatchingTrack && state.thumbnail)
           ? state.thumbnail
           : (this.fastMeta.thumbnail || (effectiveVideoId ? `https://i.ytimg.com/vi/${effectiveVideoId}/hqdefault.jpg` : undefined));
