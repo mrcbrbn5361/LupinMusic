@@ -394,6 +394,9 @@ const RESOLVE_MEDIA_JS = `(() => {
         currentTime: cur || 0,
         duration: dur || 0,
         paused: pstate !== 1,
+        // <video> elementinin gercek durumu: pstate 3 (buffering) icinde de
+        // ses akabiliyor; duraklatma zorlamasi buna bakar.
+        vPaused: v ? !!v.paused : null,
         playerState: pstate,
         isAd,
         adSignal: rawAd ? (adSignal + '|vdur=' + vdur) : '',
@@ -428,6 +431,7 @@ const RESOLVE_MEDIA_JS = `(() => {
       currentTime: v.currentTime || 0,
       duration: v.duration || 0,
       paused: v.paused,
+      vPaused: !!v.paused,
       playerState: v.ended ? 0 : (v.paused ? 2 : 1),
       isAd: false,
       videoId: urlVid || '',
@@ -482,6 +486,9 @@ export class AudioEngine {
   private coldReloadDone: boolean = false;
   private resolveFailStreak: number = 0;
   private lastSnapBackAt: number = 0;
+  // Duraklatma zorlamasi: kullanici pause ettiyse YT kendi akisini (reklam sonu
+  // gecisi, autonav) geri baslatsa bile motor sesi yeniden kapatir.
+  private lastPauseEnforceAt: number = 0;
   // Baslik gecis korumasi: vid degistigi halde baslik henuz degismemis ise o deger
   // onceki videonundur; yeni baslik gelene (veya kisa pencereye) kadar kullanilmaz.
   private lastStateVid: string = '';
@@ -548,11 +555,15 @@ export class AudioEngine {
   /** Hizli-ses hold'unu birak; istenirse YT videosunu sesli devam ettir. */
   private async clearFastHold(resumeYt: boolean): Promise<void> {
     if (!this.win || this.win.isDestroyed()) return;
+    // Kullanici duraklattiysa hold birakilsa bile oynatici UYANDIRILMAZ:
+    // kopru yerlestigi/settle oldugu anda sarki kendiliginden devam ediyor,
+    // Discord presence'i de 'playing'e donuyordu (pause flapping).
+    const mayResume = resumeYt && this.shouldPlay;
     try {
       await this.win.webContents.executeJavaScript(`(() => {
         try {
           window.__lupin_fast_hold = false;
-          ${resumeYt ? `
+          ${mayResume ? `
           const mp = document.getElementById('movie_player') || window.__hmp;
           if (mp && typeof mp.playVideo === 'function') mp.playVideo();
           const v = document.querySelector('video');
@@ -731,6 +742,9 @@ export class AudioEngine {
   private async settleFastPath(posSeconds: number): Promise<void> {
     await this.stopFastElement();
     if (!this.win || this.win.isDestroyed()) return;
+    // Duraklatma kopru devrede yapildiysa devralma yalnizca konumlandirir,
+    // oynatici duraklatilmis kalir ( aksi halde pause aninda sarki geri doner).
+    const keepPaused = !this.shouldPlay;
     try {
       await this.win.webContents.executeJavaScript(`(() => {
         try {
@@ -741,9 +755,13 @@ export class AudioEngine {
             const d = mp.getDuration();
             if (d > 0) mp.seekTo(Math.min(s, Math.max(0, d - 0.5)), true);
           }
+          ${keepPaused ? `
+          if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
+          const v0 = document.querySelector('video');
+          if (v0) { v0.playbackRate = 1; v0.muted = false; v0.pause(); }` : `
           if (mp && typeof mp.playVideo === 'function') mp.playVideo();
           const v = document.querySelector('video');
-          if (v) { v.playbackRate = 1; v.muted = false; v.play().catch(() => {}); }
+          if (v) { v.playbackRate = 1; v.muted = false; v.play().catch(() => {}); }`}
         } catch {}
       })()`, true).catch(() => {});
       await this.setVolume(this.volume);
@@ -1301,6 +1319,24 @@ export class AudioEngine {
           }
         }
 
+        // Duraklatma zorlamasi: kullanici pause ettiyse YT kendi akisini
+        // (reklam sonu gecisi, autonav, hazir olma) kendiliginden baslatirsa
+        // motor sesi yeniden kapatir — aksi halde "duraklattim ama caliyor"
+        // ve presence'in playing'de kilitlenmesi olurdu.
+        // Karar <video>.paused'a bakar: pstate 3 (buffering) icinde de ses akabilir.
+        if (!this.shouldPlay && state.vPaused === false && Date.now() - this.lastPauseEnforceAt > 1000) {
+          this.lastPauseEnforceAt = Date.now();
+          console.log(`[AudioEngine] pause enforced at ${new Date().toTimeString().slice(0, 8)}: video resumed while paused (cur=${cur.toFixed(2)} pstate=${pstate})`);
+          this.win?.webContents.executeJavaScript(`(() => {
+            try {
+              window.__lupin_should_play = false;
+              const mp = document.getElementById('movie_player') || window.__hmp;
+              if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
+              for (const v of document.querySelectorAll('video, audio')) { try { v.pause(); } catch {} }
+            } catch {}
+          })()`, true).catch(() => {});
+        }
+
         // Erken 'ended'/'paused' (playerState 0 veya 2) korumasi:
         // YALNIZCA sarki baslangicinda (ilk 2.5 sn) henuz baslamamis oynatici
         // 'bitti/durakladi' sanilmasin: gecis sayilir, play poke gonderilir.
@@ -1358,7 +1394,9 @@ export class AudioEngine {
           if (this.adStreak === 2) {
             console.log(`[AudioEngine] ad detected: vid=${streakKey} cur=${cur.toFixed(2)} dur=${dur.toFixed(2)} pstate=${pstate} stateVid=${stateVid} signal=${state.adSignal || ''}`);
           }
-          if (this.adStreak >= 2 && this.adSeeks < 3 && dur > 0) {
+          // Duraklatilmisken reklami sona sarma: YouTube reklam bitince icerigi
+          // kendiliginden baslatip pause flapping uretiyordu.
+          if (this.adStreak >= 2 && this.adSeeks < 3 && dur > 0 && this.shouldPlay) {
             this.adSeeks += 1;
             console.log(`[AudioEngine] ad-skip seek #${this.adSeeks} (dur=${dur.toFixed(2)})`);
             this.win?.webContents.executeJavaScript(`(() => {

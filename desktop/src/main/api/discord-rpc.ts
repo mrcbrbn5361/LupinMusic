@@ -182,7 +182,14 @@ export class DiscordRpcManager {
     const seekOccurred = Math.abs(currentTime - expectedCurrentTime) > 3.5;
 
     if (!trackChanged && !statusChanged && !durChanged && !seekOccurred) {
-      // Nothing significant changed — Discord client handles countdown/scrubber automatically!
+      // Anlik gonderim yok; AMA bekleyen kuyruk bayat kalmamali. Aksi halde
+      // pause sonrasi kuyrukta kalan 'playing' 1.5 sn sonra YANLIS gonderilir
+      // ve presence duraklatilmis olmasina ragmen 'playing'de kilitlenir
+      // (poll'lar her seferinde diff-skip ile duzeltmeyi engelliyordu).
+      const p = this.pendingPayload;
+      if (p && (p.status !== status || !p.track || p.track.id !== track.id)) {
+        this.queuePending(track, status, currentTime);
+      }
       return;
     }
 
@@ -191,17 +198,7 @@ export class DiscordRpcManager {
     const timeSinceLastSend = now - this.lastActivitySentTime;
 
     if (timeSinceLastSend < 1500) {
-      this.pendingPayload = { track, status, currentTime };
-      if (!this.throttleTimeout) {
-        this.throttleTimeout = setTimeout(() => {
-          this.throttleTimeout = null;
-          if (this.pendingPayload) {
-            const p = this.pendingPayload;
-            this.pendingPayload = null;
-            this.sendActivity(p.track, p.status, p.currentTime);
-          }
-        }, 1500 - timeSinceLastSend);
-      }
+      this.queuePending(track, status, currentTime);
       return;
     }
 
@@ -212,6 +209,19 @@ export class DiscordRpcManager {
     this.pendingPayload = null;
 
     this.sendActivity(track, status, currentTime);
+  }
+
+  /** Throttle edilen guncellemeyi kuyruga al; kuyruk daima EN SON durumu tasir. */
+  private queuePending(track: Track, status: PlaybackStatus, currentTime: number): void {
+    this.pendingPayload = { track, status, currentTime };
+    if (this.throttleTimeout) return;
+    const wait = Math.max(0, 1500 - (Date.now() - this.lastActivitySentTime));
+    this.throttleTimeout = setTimeout(() => {
+      this.throttleTimeout = null;
+      const p = this.pendingPayload;
+      this.pendingPayload = null;
+      if (p) this.sendActivity(p.track, p.status, p.currentTime);
+    }, wait);
   }
 
   private sendActivity(track: Track | null, status: PlaybackStatus, currentTime: number = 0): void {

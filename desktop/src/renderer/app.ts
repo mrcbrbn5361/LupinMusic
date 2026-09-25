@@ -1,3 +1,5 @@
+import { renderNowPlayingCard } from './playerCard';
+
 // Declare window.api type from preload
 declare global {
   interface Window {
@@ -1164,10 +1166,26 @@ if (btnDiscordInvite) {
     const settings = await window.api?.getSettings();
     if (settings?.discordWebhookUrl && settings.discordWebhookUrl.startsWith('http')) {
       showToast('⏳ Discord kanalına gönderiliyor...');
+      // Gorsel "now playing" karti renderer'da cizilir (Discord'a PNG gonderilir);
+      // cizilemezse ana surec eski metin embed'ine duser.
+      let cardPng = '';
+      try {
+        cardPng = await renderNowPlayingCard({
+          title: currentTrack.title,
+          artist: currentTrack.artist,
+          coverUrl: currentTrack.thumbnail,
+          currentSec: cur,
+          durationSec: dur,
+          appLabel: 'Lupin Music • Birlikte Dinle'
+        });
+      } catch {
+        cardPng = '';
+      }
       const res = await window.api?.sendDiscordWebhookInvite({
         track: currentTrack,
         currentTime: cur,
-        duration: dur
+        duration: dur,
+        cardPng
       });
 
       if (res?.success) {
@@ -1191,7 +1209,7 @@ function throttledVolumeToast() {
 }
 
 window.api?.onRemoteControl?.((action: string, payload?: any) => {
-  if (action === 'play') {
+  if (action === 'play' || action === 'resume') {
     if (!isPlaying) togglePlayPause();
   } else if (action === 'pause') {
     if (isPlaying) togglePlayPause();

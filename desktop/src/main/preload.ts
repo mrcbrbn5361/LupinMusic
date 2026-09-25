@@ -54,7 +54,7 @@ const api = {
   },
 
   // Discord Webhook & Sharing
-  sendDiscordWebhookInvite: (payload: { track: Track; currentTime?: number; duration?: number; webhookUrl?: string }): Promise<{ success: boolean; error?: string }> =>
+  sendDiscordWebhookInvite: (payload: { track: Track; currentTime?: number; duration?: number; webhookUrl?: string; cardPng?: string }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('discord:sendWebhookInvite', payload),
   copyToClipboard: (text: string): Promise<boolean> =>
     ipcRenderer.invoke('clipboard:writeText', text),
