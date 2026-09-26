@@ -56,7 +56,8 @@ audioEngine.setCleanSourceResolver(
   (videoId: string) => innerTube.findCleanSource(
     videoId,
     currentTrack?.title || '',
-    currentTrack?.artist || ''
+    currentTrack?.artist || '',
+    Math.round(currentTrack?.duration || 0)
   ),
   (oldId: string, newId: string) => {
     console.log(`[Main] source swapped (ad-free): ${oldId} -> ${newId}`);

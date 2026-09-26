@@ -63,51 +63,82 @@ export class InnerTubeService {
   }
 
   /**
-   * Ayni sarki/sanatci icin rekamsiz (ads-supported olmayan) kaynak bulur.
-   * Adimlar: tam baslik sifari -> gerekirse sanatci+baslik -> ilk uygun aday.
-   * Bulunamazsa null doner (cagiran yer mevcut kaynakta kalir).
+   * Ayni sarki icin rekamsiz (ads-supported olmayan) kaynak bulur.
+   * GUVENLI: kaynak degisimi yanlis sarki calinmasina yol acmamali. Aday
+   * ancak (a) normalize basliklar ESIT, (b) sure farki <= 3 sn, (c) sanatci
+   * eslesiyorsa kullanilir; aksi halde mevcut kaynakta kalinir (reklam
+   * susturulur, yanlis sarki calinmaz).
    */
-  public async findCleanSource(videoId: string, title: string, artist: string): Promise<string | null> {
+  public async findCleanSource(videoId: string, title: string, artist: string, duration = 0): Promise<string | null> {
     if (!videoId || !title) return null;
-    const clean = title.replace(/\s*[([][^)\]]*[)\]]\s*$/g, '').replace(/\s*[-–|]\s*(official|video|lyrics?)\s*$/i, '').trim();
-    const q1 = `${clean} ${artist || ''}`.trim();
-    const q2 = `${artist || ''} ${clean}`.trim();
+    const clean = title.replace(/\s*[([][^)\]]*[)\]]\s*$/g, '').replace(/\s*[-–|]\s*(official|video|lyrics?|audio)\s*$/i, '').trim();
+    const queries = [`${clean} ${artist || ''}`.trim()];
+    if (artist) queries.push(`${artist} ${clean}`.trim());
 
     const candidates: Song[] = [];
-    for (const q of [q1, q2]) {
+    for (const q of queries) {
       const res = await this.search(q, 'songs');
       candidates.push(...(res.songs || []));
-      if (candidates.length >= 8) break;
+      if (candidates.length >= 10) break;
     }
 
     const seen = new Set<string>([videoId]);
-    const titleKey = clean.toLowerCase();
+    const wantTitle = this.normalizeTitle(clean);
+    const wantArtist = this.normalizeArtist(artist);
     for (const c of candidates) {
       if (!c.id || seen.has(c.id)) continue;
       seen.add(c.id);
-      // Ayni sarki mi? (baslik benzerligi + sure/sanatci eslesmesi)
-      const tOk = this.similarTitle(titleKey, c.title.toLowerCase());
-      const aOk = !artist || !c.artist || c.artist.toLowerCase().includes(artist.toLowerCase().split(/[\s,]+/)[0]);
-      if (!tOk || !aOk) continue;
       if (c.isVideo) continue;
+
+      // (a) baslik: normalize ESIT olmali (substring degil — "Ask" / "Ask Olsun" karismamali)
+      if (this.normalizeTitle(c.title) !== wantTitle) continue;
+
+      // (b) sure: ayni kayit olmali (canli/remix kayitlari elenir)
+      if (duration > 0 && c.duration > 0) {
+        const diff = Math.abs(c.duration - duration);
+        if (diff > 3) continue;
+      } else if (duration > 0 && (!c.duration || c.duration <= 0)) {
+        continue;
+      }
+
+      // (c) sanatci: en az bir token eslesmeli
+      if (wantArtist && !this.artistMatches(wantArtist, this.normalizeArtist(c.artist))) continue;
+
       if (await this.isAdSupported(c.id)) continue;
+      console.log(`[InnerTube] clean source: ${videoId} -> ${c.id} ("${clean}" / ${c.artist} / ${c.duration}s)`);
       return c.id;
     }
     return null;
   }
 
-  private similarTitle(a: string, b: string): boolean {
-    const norm = (s: string) => s
-      .replace(/[()[\]]/g, ' ')
-      .replace(/\b(feat|ft|with|official|video|audio|lyrics?|hd|hq|remaster(ed)?|live|explicit)\b/gi, ' ')
+  private normalizeTitle(title: string): string {
+    return String(title || '')
+      .toLocaleLowerCase('tr')
+      .replace(/\((?:feat|ft|with)[^)]*\)/g, ' ')
+      .replace(/[([][^)\]]*[)\]]/g, ' ')
+      .replace(/\b(official|video|audio|lyrics?|lyric|hd|hq|remaster(?:ed)?|remix|live|explicit|clean|full|mono|stereo|4k|remastered)\b/gi, ' ')
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-      .replace(/\s+/g, ' ').trim();
-    const x = norm(a);
-    const y = norm(b);
-    if (!x || !y) return false;
-    if (x === y) return true;
-    return x.includes(y) || y.includes(x);
+      .replace(/\s+/g, ' ')
+      .trim();
   }
+
+  private normalizeArtist(artist: string): string {
+    return String(artist || '')
+      .toLocaleLowerCase('tr')
+      .replace(/\b(feat|ft|ve|and|&|x)\b/gi, ' ')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private artistMatches(want: string, got: string): boolean {
+    if (!want || !got) return false;
+    if (want === got) return true;
+    const a = want.split(' ').filter((t) => t.length >= 3);
+    const b = new Set(got.split(' '));
+    return a.some((t) => b.has(t));
+  }
+
 
   private formatDuration(sec: number): string {
     const m = Math.floor(sec / 60);

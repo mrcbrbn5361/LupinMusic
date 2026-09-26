@@ -466,6 +466,14 @@ const RESOLVE_MEDIA_JS = `(() => {
         playerState: pstate,
         isAd: isAd0,
         adSignal: rawAd ? (adSignal + '|vdur=' + vdur) : '',
+        adState: (() => { try { return typeof mp.getAdState === 'function' ? mp.getAdState() : -1; } catch (e) { return -1; } })(),
+        adOverlay: (() => {
+          try {
+            const ov = document.querySelector('.ytp-ad-player-overlay, .ytp-ad-image-overlay, .ytp-ad-text');
+            return !!(ov && ov.offsetParent !== null);
+          } catch (e) { return false; }
+        })(),
+        adDuration: vdur,
         videoId: vid || '',
         title: title || '',
         artist: artist || '',
@@ -555,6 +563,15 @@ export class AudioEngine {
   // Duraklatma zorlamasi: kullanici pause ettiyse YT kendi akisini (reklam sonu
   // gecisi, autonav) geri baslatsa bile motor sesi yeniden kapatir.
   private lastPauseEnforceAt: number = 0;
+  // Motor sesi susturdugunu sayfaya da isaretler (tanilama + elementin hemen
+  // susturulmasi). `window.__lupin_muted` = true ise pencerede ses YOK.
+  private setEngineMuted(muted: boolean): void {
+    this.engineMuted = muted;
+    try { this.win?.webContents.setAudioMuted(muted); } catch {}
+    this.win?.webContents.executeJavaScript(
+      `(() => { window.__lupin_muted = ${muted ? 'true' : 'false'}; })()`, true
+    ).catch(() => {});
+  }
   // Duraklatma anindaki konum: konum gercekten ilerliyorsa yeniden duraklat,
   // buffering kilidinde hic dokunma (ac-kapa dongusu olusurdu).
   private pauseAnchor: number = -1;
@@ -1578,26 +1595,38 @@ export class AudioEngine {
         }
 
         const isPaused = !this.shouldPlay || (state.paused && pstate === 2) || pstate === 0;
-        let isAd = state.isAd === true;
-        // BAYAT REKLAM SINYALI: `ad-showing`/`ad-interrupting` sinifi sarki
-        // basinda takili kalabiliyor. 120sn'den kisa gercek parcalarda
-        // (ornegin 118sn) bu sinyal kalici "reklam" sanilip butun ilerlemeyi
-        // donduruyordu (kullanici 00:00 goruyor, parti konumu uygulanmiyordu).
-        // Sinif YALNIZCA kisa sure dogrulanmazsa gecerli; asil belirtecler
-        // getAdState()===1 veya gorunur reklam overlay'i.
+
+        // ---- REKLAM TESPITI (tek kural, iki gerekce) ----
+        // GUVENLI (dogrudan reklam): getAdState()===1 veya gorunur overlay.
+        // ZAYIF (sadece sinif): 'ad-showing'/'ad-interrupting' sarki basinda
+        // takilabiliyor. Bu durumda medya SURESININ icerikle uyumu belirleyici:
+        //   - medya suresi icerikle ayni  -> takilmis sinif, reklam DEGIL
+        //   - medya suresi farkli/bilinmiyor -> gercek reklam (onceki kapi 120sn
+        //     idi; >=120sn veya bilinmeyen sureli reklamlar 18 sn tam sesle
+        //     oynuyordu)
+        const contentDurNow = this.lastOursDur || (Number(this.fastMeta.duration) || 0);
+        const vdur = Number(state.adDuration) || 0;
+        const durLooksLikeContent = contentDurNow > 0 && vdur > 0
+          && Math.abs(vdur - contentDurNow) < Math.max(3, contentDurNow * 0.05);
+        const strongAd = state.adState === 1 || state.adOverlay === true;
+        const weakAd = !!(state.adSignal || '');
+        // Ic suresi bilinmiyorsa zayif sinyal tek basina yeterli degil (sarki
+        // basinda takilan sinif musikiyi susturmasin) — eski 120 sn kapi devreye girer.
+        let isAd = strongAd
+          || (weakAd && (contentDurNow > 0 ? !durLooksLikeContent : state.isAd === true));
+        // Ic ses gomulu reklam: DOM'da hicbir sinyal yokken bile isaret varsa
+        // gomulu reklam kabul edilir (icerik suresiyle uyumsuz, kisa medya).
+        if (!isAd && vdur > 0 && contentDurNow > 0 && vdur < 120
+            && Math.abs(vdur - contentDurNow) >= Math.max(3, contentDurNow * 0.05) && state.playerState === 1) {
+          isAd = true;
+        }
+
         const adSignalText = String(state.adSignal || '');
         if (isAd) {
           const sameSignal = adSignalText === this.adSignalKey;
           if (!sameSignal) {
             this.adSignalKey = adSignalText;
             this.adSignalSince = Date.now();
-          }
-          const classOnly = adSignalText.startsWith('cls:') && !adSignalText.includes('overlay');
-          if (classOnly && Date.now() - this.adSignalSince > 8000) {
-            isAd = false;
-            this.adSignalKey = '';
-            this.adSignalSince = 0;
-            console.log(`[AudioEngine] stale ad signal ignored (${adSignalText}) after 8s â€” treating as content`);
           }
         } else {
           this.adSignalKey = '';
@@ -1617,23 +1646,26 @@ export class AudioEngine {
         // KRITIK: sinyal bayat sayilip isAd=false olsa bile medya icerik degilse
         // sesi ACMA. 8 sn sonra bayat sinyali yoksayiyorduk ve reklam sessizce
         // duyulur hale geliyordu ("reklamlar hala var" sikayeti).
-        const contentDur = this.lastOursDur || (Number(this.fastMeta.duration) || 0);
+        const contentDur = contentDurNow;
         // "Medya icerik mi?" ayrimi toleransli olmali: ayni sarkinin mp suresi
         // (177) ile video elementi suresi (172.28) kucuk farklar gosterebiliyor.
-        const mediaIsContent = contentDur > 0 && dur > 0
-          && Math.abs(dur - contentDur) < Math.max(3, contentDur * 0.05);
-        // Gercek reklam kisa olur: medya <120 sn, icerik >=120 sn ve sureler uymuyor
+        const mediaIsContent = durLooksLikeContent;
+        // Ic ses gomulu reklam sonrasi sessiz kalma: isAd zaten medya-icerik
+        // ayrimini iceriyor, ayrica suresi tutmayan medya icin ek kural var.
         const adStillOnAir = !isAd && !mediaIsContent && dur > 0 && dur < 120 && contentDur >= 120;
 
-        if ((isAd || adStillOnAir) && this.adblockEnabled && Date.now() - this.lastPlayAt > 3000) {
+        if ((isAd || adStillOnAir) && this.adblockEnabled && Date.now() - this.lastPlayAt > 400) {
           if (!isAd) {
             console.log(`[AudioEngine] ad signal stale but media is not content (dur=${dur.toFixed(1)} vs ${contentDur.toFixed(1)}) — staying muted`);
           }
           // Grace: gecis/ilk-baslangic pencerelerinde (<=3sn) reklam sinyalleri
           // gecici takiliyor; motorun mute/seek'i bu pencerede ASLA dokunmaz.
           if (!this.engineMuted) {
-            this.engineMuted = true;
-            try { this.win?.webContents.setAudioMuted(true); } catch {}
+            // Element de ANIDA susturulsun (ad-skip JS'i bir sonraki adimda calisir)
+            this.win?.webContents.executeJavaScript(
+              `(() => { for (const v of document.querySelectorAll('video, audio')) { try { v.muted = true; } catch {} } })()`, true
+            ).catch(() => {});
+            this.setEngineMuted(true);
           }
           const streakKey = state.videoId || this.currentVideoId;
           this.adStreak = (this.adStreakKey === streakKey) ? this.adStreak + 1 : 1;
@@ -1645,7 +1677,7 @@ export class AudioEngine {
           // gizlemek yetmez. Ayni sarki icin rekamsiz kaynak varsa oraya gec.
           // (Eski 'lastPlayAt > 6000' kapisi ilk reklamda (2-4 sn) saglanmiyor,
           //  bu yuzden kaynak degisimi hic calismiyordu.)
-          if (this.adStreak === 2 && this.adSwapCount < 3
+          if (this.adStreak === 2 && strongAd && this.adSwapCount < 3
               && this.adSwapTriedFor !== streakKey && !this.adSwappedIds.has(streakKey)) {
             this.adSwapTriedFor = streakKey;
             this.adSwappedIds.add(streakKey);
@@ -1677,10 +1709,7 @@ export class AudioEngine {
           this.adStreak = 0;
           this.adStreakKey = '';
           this.adSeeks = 0;
-          if (this.engineMuted) {
-            this.engineMuted = false;
-            try { this.win?.webContents.setAudioMuted(false); } catch {}
-          }
+          if (this.engineMuted) this.setEngineMuted(false);
         }
 
         // DOM'da baska bir video (prewarm/onceki parca) oynarken state.title

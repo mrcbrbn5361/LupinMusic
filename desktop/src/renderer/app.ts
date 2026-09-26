@@ -158,6 +158,7 @@ if (titlebar) {
 
 function applyCurrentTrackUI(track: Track) {
   currentTrack = track;
+  noteTaste(track);
   playerTitle.textContent = track.title || 'Lupin Music';
   playerArtist.textContent = track.artist || 'Lupin Audio';
   applyThumb(playerThumb, track.thumbnail || '', track.id);
@@ -203,6 +204,17 @@ let pendingSeek: { t: number; at: number } | null = null;
 let joinSeek: { id: string; t: number; at: number; tries: number } | null = null;
 // Kullanicinin bilerek duraklatip duraklatmadigi (tekrar-bir karari icin)
 let userPaused: boolean = false;
+
+/** Ayni kaydin farkli video id'leri icin normalize anahtar. */
+function trackKey(t: { title?: string; artist?: string; duration?: number }): string {
+  const norm = (v: string) => String(v || '')
+    .toLocaleLowerCase('tr')
+    .replace(/\b(official|video|audio|lyrics?|hd|hq|remaster(?:ed)?|live|explicit|full|mono|stereo)\b/gi, ' ')
+    .replace(/[()\[\]]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ').trim();
+  return norm(t.title || '') + '|' + norm(t.artist || '');
+}
 
 /** HTML enjeksiyonuna karsi metin kacirma (InnerTube verisi disaridandir). */
 function esc(s: string): string {
@@ -1206,9 +1218,10 @@ function renderSearchResults(res: any, query: string): void {
     return;
   }
 
+  const ranked = rankByTaste(songs);
   const sections: string[] = [];
-  if (songs.length) {
-    sections.push(sectionHtml('🎵 Şarkılar', songs, renderSongCardHtml, 'song'));
+  if (ranked.length) {
+    sections.push(sectionHtml('🎵 Şarkılar', ranked, renderSongCardHtml, 'song'));
   }
   if (artists.length) {
     sections.push(sectionHtml('👤 Sanatçılar', artists, renderBrowseCardHtml, 'artist'));
@@ -1227,7 +1240,7 @@ function renderSearchResults(res: any, query: string): void {
     <span class="search-hint">Video versiyonları arama sonuçlarını seyrek gösterir; varsayılan yalnızca müziktir.</span>
   </div>`);
   cardsGrid.innerHTML = sections.join('');
-  wireSongCards(songs.concat(videos));
+  wireSongCards(ranked.concat(videos));
   wireBrowseCards();
 
   const vt = document.getElementById('btnToggleVideoVersions');
@@ -1246,6 +1259,60 @@ function renderSearchResults(res: any, query: string): void {
       if (q) searchInput.dispatchEvent(new Event('input'));
     });
   }
+}
+
+/**
+ * Zevke gore siralama: kullanici "ilk acilan sarki"ya gore filtrelenmis bir
+ * liste istiyor. Puan sirasi:
+ *   2 = sanatci, halihazirda dinlenen/oynanmis sanatcilardan
+ *   1 = baslik ya da albüm, halihazirda dinlenen parcalarla ortak
+ *   0 = diger
+ * Ayrica ayni kaydin tekrarlari ve halihazirda calinan parca elenir.
+ */
+const recentArtistTokens = new Set<string>();
+const recentTrackKeys = new Set<string>();
+
+function noteTaste(track: Track | null | undefined): void {
+  if (!track) return;
+  for (const token of String(track.artist || '').toLocaleLowerCase('tr').split(/[\s,;&/]+/)) {
+    if (token.length >= 3) recentArtistTokens.add(token);
+  }
+  recentTrackKeys.add(trackKey(track));
+  if (recentArtistTokens.size > 80) {
+    const first = recentArtistTokens.values().next().value;
+    if (first) recentArtistTokens.delete(first);
+  }
+  if (recentTrackKeys.size > 120) {
+    const first = recentTrackKeys.values().next().value;
+    if (first) recentTrackKeys.delete(first);
+  }
+}
+
+function rankByTaste(songs: Track[]): Track[] {
+  const seen = new Set<string>();
+  const out: Track[] = [];
+  for (const t of songs) {
+    const key = trackKey(t);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    out.push(t);
+  }
+  const score = (t: Track): number => {
+    const artistTokens = String(t.artist || '').toLocaleLowerCase('tr').split(/[\s,;&/]+/);
+    if (artistTokens.some((a) => a.length >= 3 && recentArtistTokens.has(a))) return 2;
+    const titleTokens = String(t.title || '').toLocaleLowerCase('tr').split(/[\s,;&/'-]+/);
+    if (recentTrackKeys.has(trackKey(t))) return 1;
+    for (const key of recentTrackKeys) {
+      for (const tok of key.split(' ')) {
+        if (tok.length >= 5 && titleTokens.includes(tok)) return 1;
+      }
+    }
+    return 0;
+  };
+  return out
+    .map((t, i) => ({ t, s: score(t), i }))
+    .sort((a, b) => (b.s - a.s) || (a.i - b.i))
+    .map((x) => x.t);
 }
 
 /** Bolumlenmis HTML'deki sarki kartlarina tiklanma davranisini baglar. */
