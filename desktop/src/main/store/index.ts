@@ -3,11 +3,19 @@ import * as path from 'path';
 import { app } from 'electron';
 import type { Track, AppSettings } from '../../types/index.js';
 
+export interface UserPlaylist {
+  id: string;
+  name: string;
+  createdAt: number;
+  tracks: Track[];
+}
+
 export interface LocalStoreData {
   settings: AppSettings;
   likedTracks: Track[];
   history: Track[];
   queue: Track[];
+  playlists: UserPlaylist[];
 }
 
 const defaultData: LocalStoreData = {
@@ -23,7 +31,8 @@ const defaultData: LocalStoreData = {
   },
   likedTracks: [],
   history: [],
-  queue: []
+  queue: [],
+  playlists: []
 };
 
 export class AppStore {
@@ -120,5 +129,51 @@ export class AppStore {
 
   public getHistory(): Track[] {
     return this.data.history;
+  }
+
+  // ---- Kullanici calisma listeleri (yerel, Spotify tarzi) ----
+  public getPlaylists(): UserPlaylist[] {
+    if (!Array.isArray(this.data.playlists)) this.data.playlists = [];
+    return this.data.playlists;
+  }
+
+  public createPlaylist(name: string, tracks: Track[]): UserPlaylist {
+    const clean = (name || 'Yeni Liste').trim().slice(0, 60) || 'Yeni Liste';
+    const pl: UserPlaylist = {
+      id: `pl_${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
+      name: clean,
+      createdAt: Date.now(),
+      tracks: (Array.isArray(tracks) ? tracks : []).filter((t) => t && t.id).slice(0, 500)
+    };
+    this.getPlaylists().unshift(pl);
+    this.save();
+    return pl;
+  }
+
+  public deletePlaylist(id: string): boolean {
+    const arr = this.getPlaylists();
+    const idx = arr.findIndex((p) => p.id === id);
+    if (idx < 0) return false;
+    arr.splice(idx, 1);
+    this.save();
+    return true;
+  }
+
+  public playlistAdd(id: string, track: Track): boolean {
+    const pl = this.getPlaylists().find((p) => p.id === id);
+    if (!pl || !track || !track.id) return false;
+    if (pl.tracks.some((t) => t.id === track.id)) return true;
+    pl.tracks.push(track);
+    this.save();
+    return true;
+  }
+
+  public playlistRemoveTrack(id: string, trackId: string): boolean {
+    const pl = this.getPlaylists().find((p) => p.id === id);
+    if (!pl) return false;
+    const before = pl.tracks.length;
+    pl.tracks = pl.tracks.filter((t) => t.id !== trackId);
+    if (pl.tracks.length !== before) this.save();
+    return pl.tracks.length !== before;
   }
 }

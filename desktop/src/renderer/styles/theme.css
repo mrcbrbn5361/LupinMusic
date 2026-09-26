@@ -1215,3 +1215,107 @@ input:checked + .slider:before {
   font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
 }
+
+/* Kart ustunde "siraya ekle" dugmesi (hover ile belirir) */
+.card-queue-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid rgba(236, 72, 153, 0.45);
+  background: rgba(9, 2, 20, 0.82);
+  color: #f5d0fe;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.85);
+  transition: all 0.18s ease;
+  z-index: 3;
+}
+
+.music-card:hover .card-queue-btn,
+.card-queue-btn:focus-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.card-queue-btn:hover {
+  background: rgba(236, 72, 153, 0.35);
+  box-shadow: 0 0 14px rgba(236, 72, 153, 0.5);
+}
+
+.playlist-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid rgba(244, 63, 94, 0.5);
+  background: rgba(9, 2, 20, 0.85);
+  color: #fda4af;
+  font-size: 14px;
+  cursor: pointer;
+  z-index: 3;
+  transition: all 0.18s ease;
+}
+
+.playlist-delete:hover {
+  background: rgba(244, 63, 94, 0.3);
+  box-shadow: 0 0 14px rgba(244, 63, 94, 0.5);
+}
+
+/* Uyku zamanlayici dugmesi */
+.sleep-btn {
+  min-width: 34px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.sleep-btn.active {
+  color: #f5d0fe;
+  border-color: rgba(236, 72, 153, 0.6) !important;
+  background: rgba(236, 72, 153, 0.18) !important;
+}
+
+/* Kuyruk cekmecesinde liste kaydetme satiri */
+.queue-save-row {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px 4px;
+}
+
+.queue-save-row input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  padding: 7px 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+
+.queue-save-row .ctrl-btn {
+  width: auto;
+  padding: 7px 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.queue-save-row .ctrl-btn:hover {
+  color: #fff;
+  border-color: rgba(236, 72, 153, 0.5);
+}

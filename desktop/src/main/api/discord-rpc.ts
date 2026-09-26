@@ -253,10 +253,15 @@ export class DiscordRpcManager {
         }
       }
 
-      // Kapak resmi: Parcanin album kapi (HTTPS) dogrudan Discord Media Proxy tarafindan islenir
-      const cover = (track.thumbnail || '').trim();
+      // Kapak resmi: Parcanin album kapi (HTTPS) dogrudan Discord Media Proxy tarafindan islenir.
+      // Eski kayitlardaki imzali googleusercontent adresleri zamanla 404 verir;
+      // kalici ytimg adresine cevrilir (ayni sorun backend'de de duzeltildi).
+      let cover = (track.thumbnail || '').trim();
       const defaultLogo = 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png';
-      const largeImage = cover.startsWith('http') ? cover : defaultLogo;
+      if (/googleusercontent\.com/.test(cover) && track.id) {
+        cover = `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg`;
+      }
+      const largeImage = /^https:\/\//.test(cover) ? cover : defaultLogo;
 
       // Discord limiti: secrets (party/join) AYNI ANDA buttons ile GONDERILEMEZ
       // ("secrets cannot currently be sent with buttons") -> tamamini reddederdi.

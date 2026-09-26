@@ -53,6 +53,10 @@
             <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
             <span>Beğenilenler</span>
           </div>
+          <div class="nav-item" data-view="playlists">
+            <svg viewBox="0 0 24 24"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg>
+            <span>Listelerim</span>
+          </div>
           <div class="nav-item" data-view="history">
             <svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
             <span>Geçmiş</span>
@@ -98,6 +102,10 @@
         <div class="queue-header">
           <h3>🎵 Çalma Sırası</h3>
           <button class="win-btn close" id="btnCloseQueue">&times;</button>
+        </div>
+        <div class="queue-save-row">
+          <input type="text" id="queueSaveName" maxlength="60" placeholder="Liste adı…" />
+          <button class="ctrl-btn" id="btnSaveQueue" title="Sıradaki şarkıları yeni bir liste olarak kaydet">💾 Kaydet</button>
         </div>
         <div class="queue-list" id="queueList">
           <!-- Queue items rendered via JS -->
@@ -155,6 +163,9 @@
 
       <!-- Right Extras & Volume -->
       <div class="player-right">
+        <!-- Uyku zamanlayıcısı: tıkladıkça kapalı → 15 → 30 → 60 → 120 dk -->
+        <button class="ctrl-btn sleep-btn" id="btnSleep" title="Uyku zamanlayıcısı">⏱</button>
+
         <!-- Live Neon Equalizer -->
         <div class="equalizer" id="equalizer" title="Canlı Ses Ekolayzırı">
           <div class="eq-bar"></div>

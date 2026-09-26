@@ -1352,6 +1352,13 @@ export class AudioEngine {
         if (!this.updateCallback) return;
         let cur = Number(state.currentTime) || 0;
         let dur = Number(state.duration) || 0;
+        // YouTube bazen oynatici hazir degilken sonsuz/devasa sure dondurur
+        // (or. bot'ta 121601512 gorundu, RPC'de 5800 yilina endTimestamp).
+        // Sinirla: 0..12 saat, sonlu.
+        if (!isFinite(cur) || cur < 0) cur = 0;
+        cur = Math.min(cur, 12 * 3600);
+        if (!isFinite(dur) || dur < 0) dur = 0;
+        dur = Math.min(dur, 12 * 3600);
         let pstate = typeof state.playerState === 'number' ? state.playerState : -1;
 
         // Gecis dogrulamasi:

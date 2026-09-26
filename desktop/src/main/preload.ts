@@ -48,6 +48,13 @@ const api = {
   toggleLike: (track: Track): Promise<boolean> => ipcRenderer.invoke('store:toggleLike', track),
   getHistory: (): Promise<Track[]> => ipcRenderer.invoke('store:getHistory'),
   addToHistory: (track: Track): Promise<void> => ipcRenderer.invoke('store:addToHistory', track),
+  getPlaylists: (): Promise<any[]> => ipcRenderer.invoke('store:getPlaylists'),
+  createPlaylist: (payload: { name: string; tracks: Track[] }): Promise<any> =>
+    ipcRenderer.invoke('store:createPlaylist', payload),
+  deletePlaylist: (id: string): Promise<boolean> => ipcRenderer.invoke('store:deletePlaylist', id),
+  playlistAdd: (id: string, track: Track): Promise<boolean> => ipcRenderer.invoke('store:playlistAdd', { id, track }),
+  playlistRemove: (id: string, trackId: string): Promise<boolean> =>
+    ipcRenderer.invoke('store:playlistRemove', { id, trackId }),
 
   // Remote Control Events
   onRemoteControl: (callback: (action: string, payload?: any) => void) => {

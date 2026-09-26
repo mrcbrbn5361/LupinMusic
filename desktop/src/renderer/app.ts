@@ -88,6 +88,9 @@ const btnSaveDiscordWebhook = document.getElementById('btnSaveDiscordWebhook') a
 const btnDiscordInvite = document.getElementById('btnDiscordInvite') as HTMLButtonElement;
 const settingDisplayName = document.getElementById('settingDisplayName') as HTMLInputElement;
 const btnSaveDisplayName = document.getElementById('btnSaveDisplayName') as HTMLButtonElement;
+const btnSleep = document.getElementById('btnSleep') as HTMLButtonElement;
+const queueSaveName = document.getElementById('queueSaveName') as HTMLInputElement;
+const btnSaveQueue = document.getElementById('btnSaveQueue') as HTMLButtonElement;
 
 /**
  * Kapak resmi yedek zinciri: bazi videolarda InnerTube URL'si (ozellikle
@@ -1078,6 +1081,7 @@ function renderCards(tracks: Track[], queueContext?: Track[]) {
     card.innerHTML = `
       <div class="card-thumb-wrap">
         <img src="${esc(track.thumbnail || './logo.png')}" data-thumb="${esc(track.thumbnail || '')}" data-vid="${esc(track.id)}" class="card-thumb" alt="${esc(track.title)}" loading="lazy" onerror="lupinThumb(this)" />
+        <button class="card-queue-btn" data-qid="${esc(track.id)}" title="Sıraya ekle">＋</button>
         <div class="card-play-overlay">
           <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
         </div>
@@ -1086,13 +1090,19 @@ function renderCards(tracks: Track[], queueContext?: Track[]) {
       <div class="card-artist" title="${esc(track.artist)}">${esc(track.artist)}</div>
     `;
 
-    card.addEventListener('click', () => {
-      if (currentTrack && currentTrack.id === track.id) {
-        togglePlayPause();
-      } else {
-        playTrack(track, queueContext).catch(() => {});
-      }
-    });
+  card.addEventListener('click', (e) => {
+    const qbtn = (e.target as HTMLElement).closest?.('.card-queue-btn');
+    if (qbtn) {
+      e.stopPropagation();
+      queueInsertNext(track);
+      return;
+    }
+    if (currentTrack && currentTrack.id === track.id) {
+      togglePlayPause();
+    } else {
+      playTrack(track, queueContext).catch(() => {});
+    }
+  });
 
     cardsGrid.appendChild(card);
   });
@@ -1156,6 +1166,97 @@ async function loadLiked() {
   renderCards(liked, liked);
 }
 
+interface LocalPlaylist {
+  id: string;
+  name: string;
+  createdAt: number;
+  tracks: Track[];
+}
+
+async function loadPlaylists(openId?: string) {
+  viewTitle.textContent = '📀 Listelerim';
+  const lists: LocalPlaylist[] = (await window.api?.getPlaylists?.()) || [];
+  if (!lists.length) {
+    cardsGrid.innerHTML = `<div style="color:var(--text-secondary); padding:24px;">Henüz listen yok.<br/>Sıradaki şarkılardan <b>"💾 Kaydet"</b> ile ilk listeni oluştur.</div>`;
+    return;
+  }
+  // Belirli liste acilmak istendiyse icerigi goster
+  if (openId) {
+    const pl = lists.find((p) => p.id === openId);
+    if (pl) return openLocalPlaylist(pl);
+  }
+  const cards = lists.map((pl) => ({
+    browseId: `local:${pl.id}`,
+    title: pl.name,
+    subtitle: `${pl.tracks.length} şarkı`,
+    thumbnail: pl.tracks[0]?.thumbnail || './logo.png',
+    type: 'local' as const
+  }));
+  cardsGrid.innerHTML = sectionHtml(
+    '📀 Listelerim',
+    cards.map((c) => renderLocalPlaylistCard(c)),
+    (x) => x,
+    'local'
+  );
+  document.querySelectorAll('.local-playlist-card').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const id = (el.getAttribute('data-browse') || '').replace(/^local:/, '');
+      const isDelete = (e.target as HTMLElement).closest('.playlist-delete');
+      if (isDelete && id) {
+        e.stopPropagation();
+        deleteLocalPlaylist(id);
+        return;
+      }
+      if (id) openLocalPlaylist(id);
+    });
+  });
+}
+
+function renderLocalPlaylistCard(item: { browseId: string; title: string; subtitle: string; thumbnail: string }): string {
+  return `
+    <div class="music-card browse-card local-playlist-card" data-browse="${esc(item.browseId)}">
+      <div class="card-thumb-wrap">
+        <img src="${esc(item.thumbnail || './logo.png')}" data-thumb="${esc(item.thumbnail || '')}" class="card-thumb" alt="${esc(item.title)}" loading="lazy" onerror="lupinThumb(this)" />
+        <div class="card-play-overlay"><span class="browse-icon">📀</span></div>
+        <button class="playlist-delete" title="Listeyi sil">🗑</button>
+      </div>
+      <div class="card-title">${esc(item.title)}</div>
+      <div class="card-artist">${esc(item.subtitle)}</div>
+    </div>`;
+}
+
+function openLocalPlaylist(plOrId: LocalPlaylist | string): void {
+  const show = async () => {
+    const lists: LocalPlaylist[] = (await window.api?.getPlaylists?.()) || [];
+    const pl = typeof plOrId === 'string' ? lists.find((p) => p.id === plOrId) : plOrId;
+    if (!pl) { loadPlaylists(); return; }
+    const fresh = lists.find((p) => p.id === pl.id) || pl;
+    viewTitle.textContent = `📀 ${fresh.name}`;
+    if (!fresh.tracks.length) {
+      cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:24px;">Bu liste boş.</div>';
+      return;
+    }
+    renderCards(fresh.tracks, fresh.tracks);
+    const wrap = document.createElement('div');
+    wrap.className = 'browse-back-wrap';
+    wrap.innerHTML = '<button id="btnBrowseBack" class="ctrl-btn">← Listelerim</button>';
+    cardsGrid.appendChild(wrap);
+    document.getElementById('btnBrowseBack')?.addEventListener('click', () => {
+      browseGen += 1;
+      loadPlaylists();
+    });
+  };
+  show();
+}
+
+async function deleteLocalPlaylist(id: string): Promise<void> {
+  const ok = await window.api?.deletePlaylist?.(id);
+  if (ok) {
+    showToast('🗑 Liste silindi');
+    loadPlaylists();
+  }
+}
+
 async function loadHistory() {
   viewTitle.textContent = '🕒 Son Çalınanlar';
   const history = await window.api.getHistory();
@@ -1177,6 +1278,7 @@ navItems.forEach(item => {
 
     if (view === 'explore') loadExplore();
     else if (view === 'liked') loadLiked();
+    else if (view === 'playlists') loadPlaylists();
     else if (view === 'history') loadHistory();
     else if (view === 'search') searchInput.focus();
   });
@@ -1197,9 +1299,14 @@ searchInput.addEventListener('input', () => {
     const gen = ++browseGen;
     viewTitle.textContent = `🔍 "${q}" için Arama Sonuçları`;
     cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:20px;">Aranıyor...</div>';
-    const res = await window.api.search({ query: q, videos: showVideoVersions });
-    if (gen !== browseGen) return;
-    renderSearchResults(res, q);
+    try {
+      const res = await window.api.search({ query: q, videos: showVideoVersions });
+      if (gen !== browseGen) return;
+      renderSearchResults(res, q);
+    } catch (err: any) {
+      if (gen !== browseGen) return;
+      cardsGrid.innerHTML = `<div style="color:var(--text-secondary); padding:24px;">⚠️ Arama başarısız oldu (${esc(err?.message || 'bağlantı hatası')}). İnterneti kontrol edip tekrar dene.</div>`;
+    }
   }, 350);
 });
 
@@ -1321,8 +1428,15 @@ function wireSongCards(list: Track[]): void {
   document.querySelectorAll('.music-card[data-id]').forEach((el) => {
     const id = el.getAttribute('data-id');
     if (!id || !byId.has(id)) return;
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (e) => {
+      // "+" dugmesi kart tiklamasini yutmasin: siraya ekler
+      const qbtn = (e.target as HTMLElement).closest('.card-queue-btn');
       const track = byId.get(id);
+      if (qbtn) {
+        e.stopPropagation();
+        if (track) queueInsertNext(track);
+        return;
+      }
       if (!track) return;
       if (currentTrack && currentTrack.id === track.id) togglePlayPause();
       else playTrack(track, list).catch(() => {});
@@ -1356,6 +1470,7 @@ function renderSongCardHtml(track: Track): string {
         <img src="${esc(track.thumbnail || './logo.png')}" data-thumb="${esc(track.thumbnail || '')}" data-vid="${esc(track.id)}" class="card-thumb" alt="${esc(track.title)}" loading="lazy" onerror="lupinThumb(this)" />
         ${badge}
         ${durBadge}
+        <button class="card-queue-btn" data-qid="${esc(track.id)}" title="Sıraya ekle">＋</button>
         <div class="card-play-overlay">
           <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
         </div>
@@ -1606,6 +1721,93 @@ function leavePartyIfFollowing(reason: string): void {
   showToast(`🚪 Partiden ayrıldın (${reason}) — artık kendi listen`);
 }
 
+// ---- Uyku zamanlayıcısı (Spotify tarzi: sure bitince duraklat) ----
+const SLEEP_STEPS = [0, 15, 30, 60, 120];
+let sleepStepIdx = 0;
+let sleepTimer: number | null = null;
+
+function paintSleepButton(): void {
+  if (!btnSleep) return;
+  const mins = SLEEP_STEPS[sleepStepIdx];
+  btnSleep.textContent = mins > 0 ? `⏱${mins}` : '⏱';
+  btnSleep.classList.toggle('active', mins > 0);
+  btnSleep.title = mins > 0
+    ? `Uyku zamanlayıcısı: ${mins} dk sonra duraklat (kapatmak için tıkla)`
+    : 'Uyku zamanlayıcısı (15/30/60/120 dk)';
+}
+
+function armSleepTimer(): void {
+  if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
+  const mins = SLEEP_STEPS[sleepStepIdx];
+  if (mins <= 0) return;
+  sleepTimer = window.setTimeout(() => {
+    sleepTimer = null;
+    sleepStepIdx = 0;
+    paintSleepButton();
+    if (isPlaying) togglePlayPause();
+    showToast('😴 Uyku zamanı — müzik duraklatıldı');
+  }, mins * 60 * 1000);
+}
+
+if (btnSleep) {
+  paintSleepButton();
+  btnSleep.addEventListener('click', () => {
+    sleepStepIdx = (sleepStepIdx + 1) % SLEEP_STEPS.length;
+    paintSleepButton();
+    armSleepTimer();
+    const mins = SLEEP_STEPS[sleepStepIdx];
+    showToast(mins > 0 ? `⏱ ${mins} dk sonra duraklatılacak` : '⏱ Uyku zamanlayıcısı kapalı');
+  });
+}
+
+// ---- Siradaki kuyrugu yerel liste olarak kaydet ----
+if (btnSaveQueue) {
+  btnSaveQueue.addEventListener('click', async () => {
+    if (!currentQueue.length) { showToast('⚠️ Sıra boş, kaydedilecek şarkı yok'); return; }
+    const name = (queueSaveName?.value || '').trim().slice(0, 60)
+      || `Listem • ${new Date().toLocaleDateString('tr-TR')}`;
+    const tracks = currentQueue
+      .filter((t) => t && t.id)
+      .map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album || '', thumbnail: t.thumbnail || '', duration: t.duration || 0 }));
+    const pl = await window.api?.createPlaylist?.({ name, tracks });
+    if (pl) {
+      if (queueSaveName) queueSaveName.value = '';
+      showToast(`💾 "${pl.name}" kaydedildi (${tracks.length} şarkı)`);
+    } else {
+      showToast('⚠️ Liste kaydedilemedi');
+    }
+  });
+}
+
+/**
+ * Parçayı sıranın hemen sonrasına ekle (Spotify "sıraya ekle").
+ * Ayni kayit ikinci kez eklenmez; karistirma sirasi korunur.
+ */
+function queueInsertNext(track: Track): void {
+  if (!track || !track.id) return;
+  leavePartyIfFollowing('sıraya ekledin');
+  queueChangedDebounced();
+  const key = trackKey(track);
+  const dup = currentQueue.findIndex((t, i) => i !== currentIndex && trackKey(t) === key);
+  if (dup >= 0) {
+    currentQueue.splice(dup, 1);
+    if (dup <= currentIndex) currentIndex -= 1;
+  }
+  const at = Math.max(0, currentIndex + 1);
+  currentQueue.splice(at, 0, { ...track, source: 'pick' });
+  if (isShuffled) {
+    for (let i = 0; i < shuffleOrder.length; i++) {
+      if (shuffleOrder[i] >= at) shuffleOrder[i] += 1;
+    }
+    const pos = shuffleOrder.indexOf(currentIndex);
+    shuffleOrder.splice(pos === -1 ? shuffleOrder.length : pos + 1, 0, at);
+    shufflePos = shuffleOrder.indexOf(currentIndex);
+  }
+  trimQueueHead();
+  renderQueueList();
+  showToast(`➕ Sıraya eklendi: ${track.title}`);
+}
+
 if (btnDiscordInvite) {
   btnDiscordInvite.addEventListener('click', async () => {
     if (!currentTrack) {
@@ -1721,7 +1923,8 @@ window.api?.onRemoteControl?.((action: string, payload?: any) => {
     showToast(hasSeek
       ? `🚀 Lupin Party • ${formatTime(payload.seek)} konumundan devam ediliyor`
       : '🚀 Lupin Party şarkısına bağlanıldı!');
-  } else if (action === 'playTrackMeta' && payload && payload.id) {    // Deep link zenginlestirmesi: oynatma YENIDEN baslatilmaz, sadece
+    } else if (action === 'playTrackMeta' && payload && payload.id) {
+    // Deep link zenginlestirmesi (kuyruk bildiriminden once tanimlanir)    // Deep link zenginlestirmesi: oynatma YENIDEN baslatilmaz, sadece
     // baslik/sanatci/sure bilgisi doldurulur (arayuzde 00:00 / Lupin Track kalmasin)
     if (currentTrack && currentTrack.id === payload.id) {
       let changed = false;

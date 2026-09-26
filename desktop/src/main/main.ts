@@ -340,7 +340,7 @@ app.whenReady().then(async () => {
 
     const isPlaying = !playback.paused && (playback.playerState === 1 || playback.playerState === 3);
     const status: PlaybackStatus = isPlaying ? 'playing' : (currentTrack ? 'paused' : 'stopped');
-    const dur = playback.duration || currentTrack?.duration || 0;
+    const dur = Math.min(Math.max(0, Number(playback.duration || currentTrack?.duration || 0) || 0), 12 * 3600);
     const progress = dur > 0 ? (playback.currentTime / dur) * 100 : 0;
     // Parti senkronu icin motorun gordugu gercek durum
     partyLocal = { trackId: currentTrack?.id || '', position: playback.currentTime || 0, playing: isPlaying };
@@ -612,6 +612,16 @@ ipcMain.handle('store:updateSettings', (_event, partial: Partial<AppSettings>) =
 ipcMain.handle('store:getLikedTracks', () => store.getLikedTracks());
 ipcMain.handle('store:toggleLike', (_event, track: Track) => store.toggleLikeTrack(track));
 ipcMain.handle('store:getHistory', () => store.getHistory());
+
+// Kullanici calisma listeleri (yerel Spotify tarzi listeler)
+ipcMain.handle('store:getPlaylists', () => store.getPlaylists());
+ipcMain.handle('store:createPlaylist', (_event, payload: { name: string; tracks: Track[] }) =>
+  store.createPlaylist(payload?.name || 'Yeni Liste', payload?.tracks || []));
+ipcMain.handle('store:deletePlaylist', (_event, id: string) => store.deletePlaylist(id));
+ipcMain.handle('store:playlistAdd', (_event, payload: { id: string; track: Track }) =>
+  store.playlistAdd(payload?.id || '', payload?.track));
+ipcMain.handle('store:playlistRemove', (_event, payload: { id: string; trackId: string }) =>
+  store.playlistRemoveTrack(payload?.id || '', payload?.trackId || ''));
 ipcMain.handle('store:addToHistory', (_event, track: Track) => store.addToHistory(track));
 
 // Discord Webhook & Sharing IPC

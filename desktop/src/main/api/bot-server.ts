@@ -36,9 +36,23 @@ export class BotServer {
     duration?: number;
     progress?: number;
   }): void {
+    // Disari acik API siniri: sonsuz/devasa degerler asla yayinlanmaz
+    // (or. bos durumda duration=121601512 goruldu).
+    const sane = (v: number | undefined, fallback = 0): number => {
+      const n = Number(v);
+      if (!isFinite(n) || n < 0) return fallback;
+      return Math.min(n, 12 * 3600);
+    };
+    const next = { ...partial };
+    if (next.currentTime !== undefined) next.currentTime = sane(next.currentTime);
+    if (next.duration !== undefined) next.duration = sane(next.duration);
+    if (next.progress !== undefined) {
+      const p = Number(next.progress);
+      next.progress = isFinite(p) ? Math.max(0, Math.min(100, p)) : 0;
+    }
     this.state = {
       ...this.state,
-      ...partial,
+      ...next,
       updatedAt: Date.now()
     };
   }
