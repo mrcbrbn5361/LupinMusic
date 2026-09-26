@@ -14,6 +14,7 @@ const api = {
   search: (query: string) => ipcRenderer.invoke('music:search', query),
   getExplore: () => ipcRenderer.invoke('music:explore'),
   getRelatedTracks: (videoId: string) => ipcRenderer.invoke('music:getRelated', videoId),
+  browse: (browseId: string) => ipcRenderer.invoke('music:browse', browseId),
 
   // Audio Engine Playback Controls
   playTrack: (track: Track) => ipcRenderer.invoke('player:play', track),

@@ -17,6 +17,8 @@ interface Track {
   thumbnail: string;
   duration?: number;
   durationFormatted?: string;
+  /** Arama sonuclarinda video versiyonu olarak isaretlendiyse true */
+  isVideo?: boolean;
   /** Kuyruk kaynagi: kullanicinin sectigi parca mi, radyo ile eklenen mi */
   source?: 'pick' | 'radio';
 }
@@ -37,6 +39,7 @@ let currentTime: number = 0;
 const searchInput = document.getElementById('searchInput') as HTMLInputElement;
 const cardsGrid = document.getElementById('cardsGrid') as HTMLDivElement;
 const viewTitle = document.getElementById('viewTitle') as HTMLHeadingElement;
+const contentArea = document.querySelector('.content-area') as HTMLElement;
 const navItems = document.querySelectorAll('.nav-item');
 const toastContainer = document.getElementById('toastContainer') as HTMLDivElement;
 const queueDrawer = document.getElementById('queueDrawer') as HTMLElement;
@@ -86,9 +89,43 @@ const btnDiscordInvite = document.getElementById('btnDiscordInvite') as HTMLButt
 const settingDisplayName = document.getElementById('settingDisplayName') as HTMLInputElement;
 const btnSaveDisplayName = document.getElementById('btnSaveDisplayName') as HTMLButtonElement;
 
+/**
+ * Kapak resmi yedek zinciri: bazi videolarda InnerTube URL'si (ozellikle
+ * imzali googleusercontent adresleri) 404 verir ve kartta Lupin logosu
+ * gorunur. Sirayla dener: gelen URL -> hqdefault -> mqdefault -> sddefault
+ * -> en sonunda logo.
+ */
+const THUMB_QUALITIES = ['hqdefault', 'mqdefault', 'sddefault'];
+const THUMB_DEFAULT = './logo.png';
+
+function applyThumb(img: HTMLImageElement, url: string, videoId?: string): void {
+  const chain: string[] = [];
+  if (url) chain.push(url);
+  if (videoId) {
+    for (const q of THUMB_QUALITIES) {
+      const candidate = `https://i.ytimg.com/vi/${videoId}/${q}.jpg`;
+      if (!chain.includes(candidate)) chain.push(candidate);
+    }
+  }
+  if (!chain.length) { img.onerror = null; img.src = THUMB_DEFAULT; return; }
+  let i = 0;
+  const next = () => {
+    if (i >= chain.length) { img.onerror = null; img.src = THUMB_DEFAULT; return; }
+    img.onerror = next;
+    img.src = chain[i++];
+  };
+  img.onerror = next;
+  img.src = chain[0];
+}
+
+// Kart/poz html'inde inline onerror ile cagrilir
+(window as unknown as { lupinThumb: (img: HTMLImageElement) => void }).lupinThumb = (img) => {
+  const vid = img.getAttribute('data-vid') || '';
+  applyThumb(img, img.getAttribute('data-thumb') || '', vid);
+};
+
 // Toast Helper
-function showToast(message: string) {
-  if (!toastContainer) return;
+function showToast(message: string) {  if (!toastContainer) return;
   const toast = document.createElement('div');
   toast.className = 'toast';
   toast.textContent = message;
@@ -123,8 +160,7 @@ function applyCurrentTrackUI(track: Track) {
   currentTrack = track;
   playerTitle.textContent = track.title || 'Lupin Music';
   playerArtist.textContent = track.artist || 'Lupin Audio';
-  playerThumb.src = track.thumbnail || './logo.png';
-  playerThumb.onerror = () => { playerThumb.src = './logo.png'; };
+  applyThumb(playerThumb, track.thumbnail || '', track.id);
   document.title = `${track.title || 'Lupin Music'} • ${track.artist || 'Lupin Audio'} — Lupin Music`;
 
   if ('mediaSession' in navigator) {
@@ -978,7 +1014,7 @@ function renderQueueList() {
       ? '<span style="font-size:10px; color:var(--accent-pink); border:1px solid var(--accent-pink); border-radius:8px; padding:1px 6px; margin-left:6px;">Radyo</span>'
       : '';
     item.innerHTML = `
-      <img src="${track.thumbnail || './logo.png'}" class="queue-item-thumb" onerror="this.src='./logo.png'" />
+      <img src="${esc(track.thumbnail || './logo.png')}" data-thumb="${esc(track.thumbnail || '')}" data-vid="${esc(track.id)}" class="queue-item-thumb" onerror="lupinThumb(this)" />
       <div class="queue-item-info">
         <div class="queue-item-title">${esc(track.title)}${radioTag}</div>
         <div class="queue-item-artist">${esc(track.artist)}</div>
@@ -1029,7 +1065,7 @@ function renderCards(tracks: Track[], queueContext?: Track[]) {
     card.setAttribute('data-id', track.id);
     card.innerHTML = `
       <div class="card-thumb-wrap">
-        <img src="${track.thumbnail || './logo.png'}" class="card-thumb" alt="${esc(track.title)}" loading="lazy" onerror="this.src='./logo.png'" />
+        <img src="${esc(track.thumbnail || './logo.png')}" data-thumb="${esc(track.thumbnail || '')}" data-vid="${esc(track.id)}" class="card-thumb" alt="${esc(track.title)}" loading="lazy" onerror="lupinThumb(this)" />
         <div class="card-play-overlay">
           <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
         </div>
@@ -1058,7 +1094,43 @@ async function loadExplore() {
   try {
     const tracks = await window.api.getExplore();
     if (gen !== browseGen) return;
-    renderCards(tracks);
+
+    // "Dinlediklerine alternatifler": gecmisin son 3 sarkisindan YT radyolari
+    const history = await window.api.getHistory().catch(() => [] as Track[]);
+    if (gen !== browseGen) return;
+    const seeds = ((history || []) as Track[]).filter((t: Track) => t && t.id).slice(0, 3);
+    let alternatives: Track[] = [];
+    if (seeds.length) {
+      const picked = new Set(tracks.map((t: Track) => t.id));
+      const batches: Track[][] = await Promise.all(seeds.map((s: Track) =>
+        window.api.getRelatedTracks(s.id).catch(() => [] as Track[])
+      ));
+      if (gen !== browseGen) return;
+      const seen = new Set<string>();
+      for (const batch of batches) {
+        for (const t of batch || []) {
+          if (!t || !t.id || picked.has(t.id) || seen.has(t.id)) continue;
+          seen.add(t.id);
+          alternatives.push(t as Track);
+          if (alternatives.length >= 12) break;
+        }
+        if (alternatives.length >= 12) break;
+      }
+    }
+
+    const sections: string[] = [];
+    if (alternatives.length) {
+      sections.push(`<div class="cards-section">
+        <h3 class="cards-section-title">🎧 Dinlediklerine alternatifler</h3>
+        <div class="cards-grid">${alternatives.map(renderSongCardHtml).join('')}</div>
+      </div>`);
+    }
+    sections.push(`<div class="cards-section">
+      <h3 class="cards-section-title">🔥 Popüler Parçalar</h3>
+      <div class="cards-grid">${tracks.map(renderSongCardHtml).join('')}</div>
+    </div>`);
+    cardsGrid.innerHTML = sections.join('');
+    wireSongCards(tracks.concat(alternatives));
   } catch (err) {
     if (gen !== browseGen) return;
     cardsGrid.innerHTML = '<div style="color:var(--text-muted); padding:20px;">Keşfet yüklenemedi.</div>';
@@ -1088,6 +1160,9 @@ navItems.forEach(item => {
     navItems.forEach(n => n.classList.remove('active'));
     item.classList.add('active');
 
+    // Arama kutusu yalnizca Arama sekmesinde gorunur
+    contentArea.className = `content-area view-${view || 'explore'}`;
+
     if (view === 'explore') loadExplore();
     else if (view === 'liked') loadLiked();
     else if (view === 'history') loadHistory();
@@ -1112,21 +1187,178 @@ searchInput.addEventListener('input', () => {
     cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:20px;">Aranıyor...</div>';
     const res = await window.api.search(q);
     if (gen !== browseGen) return;
-    renderCards(res.songs || []);
+    renderSearchResults(res, q);
   }, 350);
 });
 
+/** Arama ciktisini bolumlere boler: sarkilar / video / album / sanatci / liste. */
+function renderSearchResults(res: any, query: string): void {
+  const songs: Track[] = res?.songs || [];
+  const videos: Track[] = res?.videos || [];
+  const albums: BrowseCard[] = res?.albums || [];
+  const artists: BrowseCard[] = res?.artists || [];
+  const playlists: BrowseCard[] = res?.playlists || [];
+  if (!songs.length && !videos.length && !albums.length && !artists.length && !playlists.length) {
+    cardsGrid.innerHTML = `<div style="color:var(--text-secondary); padding:24px;">"${esc(query)}" için sonuç bulunamadı.</div>`;
+    return;
+  }
+
+  const sections: string[] = [];
+  if (songs.length) {
+    sections.push(sectionHtml('🎵 Şarkılar', songs, renderSongCardHtml, 'song'));
+  }
+  if (artists.length) {
+    sections.push(sectionHtml('👤 Sanatçılar', artists, renderBrowseCardHtml, 'artist'));
+  }
+  if (albums.length) {
+    sections.push(sectionHtml('💿 Albümler', albums, renderBrowseCardHtml, 'album'));
+  }
+  if (playlists.length) {
+    sections.push(sectionHtml('📀 Oynatma Listeleri', playlists, renderBrowseCardHtml, 'playlist'));
+  }
+  if (videos.length) {
+    sections.push(sectionHtml('🎬 Video Versiyonları', videos, renderSongCardHtml, 'video'));
+  }
+  cardsGrid.innerHTML = sections.join('');
+  wireSongCards(songs.concat(videos));
+  wireBrowseCards();
+}
+
+/** Bolumlenmis HTML'deki sarki kartlarina tiklanma davranisini baglar. */
+function wireSongCards(list: Track[]): void {
+  const byId = new Map(list.map((t) => [t.id, t]));
+  document.querySelectorAll('.music-card[data-id]').forEach((el) => {
+    const id = el.getAttribute('data-id');
+    if (!id || !byId.has(id)) return;
+    el.addEventListener('click', () => {
+      const track = byId.get(id);
+      if (!track) return;
+      if (currentTrack && currentTrack.id === track.id) togglePlayPause();
+      else playTrack(track, list).catch(() => {});
+    });
+  });
+}
+
+interface BrowseCard {
+  browseId: string;
+  title: string;
+  subtitle: string;
+  thumbnail: string;
+  type: 'artist' | 'album' | 'playlist';
+  songCount?: number;
+}
+
+function sectionHtml(title: string, items: any[], itemHtml: (t: any) => string, kind: string): string {
+  return `<div class="cards-section">
+    <h3 class="cards-section-title">${esc(title)}</h3>
+    <div class="cards-grid">${items.map(itemHtml).join('')}</div>
+  </div>`;
+}
+
+function renderSongCardHtml(track: Track): string {
+  const badge = track.isVideo ? '<div class="card-type-badge">VIDEO</div>' : '';
+  return `
+    <div class="music-card" data-id="${esc(track.id)}" data-title="${esc(track.title)}" data-artist="${esc(track.artist)}" data-album="${esc(track.album || '')}" data-duration="${track.duration || 0}">
+      <div class="card-thumb-wrap">
+        <img src="${esc(track.thumbnail || './logo.png')}" data-thumb="${esc(track.thumbnail || '')}" data-vid="${esc(track.id)}" class="card-thumb" alt="${esc(track.title)}" loading="lazy" onerror="lupinThumb(this)" />
+        ${badge}
+        <div class="card-play-overlay">
+          <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+      </div>
+      <div class="card-title">${esc(track.title)}</div>
+      <div class="card-artist">${esc(track.artist)}</div>
+    </div>`;
+}
+
+function renderBrowseCardHtml(item: BrowseCard): string {
+  const icon = item.type === 'artist' ? '👤' : item.type === 'album' ? '💿' : '📀';
+  return `
+    <div class="music-card browse-card" data-browse="${esc(item.browseId)}" data-btype="${esc(item.type)}">
+      <div class="card-thumb-wrap">
+        <img src="${esc(item.thumbnail || './logo.png')}" data-thumb="${esc(item.thumbnail || '')}" class="card-thumb" alt="${esc(item.title)}" loading="lazy" onerror="lupinThumb(this)" />
+        <div class="card-play-overlay"><span class="browse-icon">${icon}</span></div>
+      </div>
+      <div class="card-title">${esc(item.title)}</div>
+      <div class="card-artist">${esc(item.subtitle || (item.type === 'artist' ? 'Sanatçı' : item.type === 'album' ? 'Albüm' : 'Oynatma listesi'))}</div>
+    </div>`;
+}
+
+/** Sanatci / album / liste kartina tiklaninca detay sayfasi acilir. */
+function wireBrowseCards(): void {
+  document.querySelectorAll('.browse-card').forEach((el) => {
+    el.addEventListener('click', () => {
+      const browseId = el.getAttribute('data-browse');
+      const btype = el.getAttribute('data-btype');
+      if (!browseId) return;
+      openBrowseDetail(browseId, btype || 'playlist');
+    });
+  });
+}
+
+async function openBrowseDetail(browseId: string, btype: string): Promise<void> {
+  const gen = ++browseGen;
+  viewTitle.textContent = 'Yükleniyor...';
+  cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:20px;">İçerik yükleniyor...</div>';
+  const detail = await window.api?.browse?.(browseId);
+  if (gen !== browseGen) return;
+  if (!detail || !detail.title) {
+    viewTitle.textContent = 'İçerik bulunamadı';
+    cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:24px;">Bu içerik yüklenemedi.</div>';
+    return;
+  }
+  const label = btype === 'artist' ? 'Sanatçı' : btype === 'album' ? 'Albüm' : 'Oynatma listesi';
+  viewTitle.textContent = `${label}: ${detail.title}`;
+  const songs: Track[] = detail.songs || [];
+  if (!songs.length) {
+    cardsGrid.innerHTML = `<div style="color:var(--text-secondary); padding:24px;">${esc(detail.subtitle || 'Bu içerikte şarkı bulunamadı.')}</div>`;
+    return;
+  }
+  renderCards(songs, songs);
+  const wrap = document.createElement('div');
+  wrap.className = 'browse-back-wrap';
+  wrap.innerHTML = '<button id="btnBrowseBack" class="ctrl-btn">← Sonuçlara dön</button>';
+  cardsGrid.appendChild(wrap);
+  const back = document.getElementById('btnBrowseBack');
+  if (back) {
+    back.addEventListener('click', () => {
+      const q = searchInput.value.trim();
+      browseGen += 1;
+      if (q) {
+        viewTitle.textContent = `🔍 "${q}" için Arama Sonuçları`;
+        const btn = document.getElementById('searchInput');
+        if (btn) btn.dispatchEvent(new Event('input'));
+      } else {
+        loadExplore();
+      }
+    });
+  }
+}
+
 // Settings Modal
+function closeSettings(): void {
+  settingsModal.classList.remove('open');
+}
+function isSettingsOpen(): boolean {
+  return settingsModal.classList.contains('open');
+}
 if (btnCloseSettings) {
-  btnCloseSettings.addEventListener('click', () => {
-    settingsModal.classList.remove('open');
+  btnCloseSettings.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeSettings();
   });
 }
 settingsModal.addEventListener('click', (e) => {
-  if (e.target === settingsModal) {
-    settingsModal.classList.remove('open');
-  }
+  // Yalnizca karta DISINDA (overlay bos alan) tiklanirsa kapat
+  if (e.target === settingsModal) closeSettings();
 });
+// Ayarlar acikken Escape kapatir; kisaayollari da yemesin
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && isSettingsOpen()) {
+    e.stopPropagation();
+    closeSettings();
+  }
+}, true);
 settingDiscordRpc.addEventListener('change', () => {
   window.api?.updateSettings({ discordRpcEnabled: settingDiscordRpc.checked });
   showToast(settingDiscordRpc.checked ? '🎮 Discord RPC Aktif' : '⚪ Discord RPC Devre Dışı');
@@ -1421,6 +1653,8 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
   // Pencere arka planda/fokus degilken kisayollar TETIKLENMEZ: baska uygulamada
   // yazarken Space/L/N gibi tuslar lupin'e gitmemeli.
   if (!document.hasFocus() || document.visibilityState === 'hidden') return;
+  // Ayarlar acikken oynatma kisayollari calismaz
+  if (isSettingsOpen()) return;
 
   const target = e.target as HTMLElement;
   const isInput = !!(

@@ -31,6 +31,8 @@ const AD_BLOCK_PATTERNS = [
 ];
 
 const ADHIDE_CSS = `
+  /* Reklam katmanlari: oynatici uzeri, panel, dilim ve cerceveler gizlenir.
+     Sansur/reklam gosterge (badge) JS ile de kaldirilir. */
   .ytp-ad-player-overlay,
   .ytp-ad-text,
   .ytp-ad-preview-container,
@@ -38,21 +40,44 @@ const ADHIDE_CSS = `
   .ytp-ad-message-container,
   .ytp-ad-image-overlay,
   .ytp-ad-overlay-container,
+  .ytp-ad-overlay-slot,
+  .ytp-ad-module,
+  .ytp-ad-badge,
+  .ytp-ad-overlay-close-button,
+  .ytp-ad-overlay-close-button-ad,
+  .ytp-ad-overlay-close-button-ad-container,
   .video-ads,
+  .ytp-ad-visible,
   #player-ads,
   #masthead-ad,
-  .ytp-ad-module,
+  #panels-full-bleed-container > .ytd-ads-player,
   ytd-ad-slot-renderer,
   .ytd-ad-slot-renderer,
+  ytd-display-ad-renderer,
+  ytd-promoted-sparkles-web-renderer,
+  ytd-in-feed-ad-layout-renderer,
+  ytd-action-companion-ad-renderer,
+  ytd-engagement-panel-section-list-renderer[target-id*="ads"],
   ytmusic-mealbar-promo-renderer,
   ytmusic-upsell-dialog-renderer,
   .mealbar-promo-renderer,
   ytmusic-statement-banner-renderer,
+  .ytmusic-inline-ad-renderer,
+  .ytmusic-promoted-item-renderer,
+  ytmusic-player-bar-ad-renderer,
   .ytd-consent-bump-v2-lightbox,
   ytmusic-consent-bump-v2-renderer {
     display: none !important;
     visibility: hidden !important;
     pointer-events: none !important;
+    opacity: 0 !important;
+  }
+  /* Oynatici cercevesini kaplayan reklam katmanlari */
+  .html5-video-player.ad-showing .ytp-chrome-bottom,
+  .html5-video-player.ad-showing .ytp-pause-overlay,
+  .html5-video-player.ad-showing .ytp-gradient-bottom,
+  .html5-video-player.ad-showing .ytp-gradient-top {
+    display: none !important;
   }
 `;
 
@@ -191,11 +216,33 @@ const ADBLOCK_INJECTION_JS = `(() => {
       } catch {}
     };
 
+    // 3b. Reklam DOM'unu surekli temizle: gosterge/panel/overlay eklenirse silinir
+    // (CSS tek sefer uygulandigi icin YouTube'un sonradan ekledigi dugumler kalir).
+    const hideAdDom = () => {
+      try {
+        const sels = [
+          '.ytp-ad-badge', '.ytp-ad-overlay-slot', '.ytp-ad-module',
+          '.ytp-ad-preview-container', '.ytp-ad-skip-button-container',
+          '.ytp-ad-message-container', '.ytp-ad-overlay-close-button',
+          '#player-ads', '#masthead-ad', '.video-ads',
+          'ytd-ad-slot-renderer', '.ytd-ad-slot-renderer',
+          'ytd-display-ad-renderer', 'ytd-in-feed-ad-layout-renderer',
+          'ytmusic-statement-banner-renderer', 'ytmusic-mealbar-promo-renderer'
+        ];
+        for (const sel of sels) {
+          for (const el of document.querySelectorAll(sel)) {
+            try { el.remove(); } catch {}
+          }
+        }
+      } catch {}
+    };
+
     // 4. Periyodik denetim ve yetkisiz duraklatmayÄ± otomatik devam ettirme (Keep-alive)
     // Hizli-ses koprusu aktifken (fast_hold) YT videosuna dokunma: cift ses olmasin
     setInterval(() => {
       dismissDialogs();
       skipAds();
+      hideAdDom();
       try {
         if (window.__lupin_should_play && !window.__lupin_fast_hold) {
           const mp = document.getElementById('movie_player') || window.__hmp;

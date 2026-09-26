@@ -522,6 +522,11 @@ ipcMain.handle('music:explore', async () => {
   return innerTube.getExplore();
 });
 
+// Sanatci / album / oynatma listesi detayi (tiklanan karta acilir)
+ipcMain.handle('music:browse', async (_event, browseId: string) => {
+  return innerTube.browse(browseId);
+});
+
 ipcMain.handle('music:getRelated', async (_event, videoId: string) => {
   return innerTube.getRelatedTracks(videoId);
 });
