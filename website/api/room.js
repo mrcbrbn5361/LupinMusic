@@ -1,7 +1,9 @@
 // Lupin Music — Birlikte Dinle oda (party room) relay'i
-// Zero-dep Vercel serverless. Oda durumu Upstash/Redis REST ile tutulur;
-// KV yoksa gelistirme icin bellek yedegi kullanilir (sunucu yeniden
-// baslayinca odalar silinir — uretim icin KV zorunludur).
+// Zero-dep Vercel serverless. Oda durumu 3 katmanla tutulur:
+//   1) Upstash/Redis (KV_* ortam degiskenleri) — kalici, tavsiye edilen
+//   2) Ucretsiz acik mesaj hatti (ntfy.sh) — hesap/kart gerektirmez, son yazilma
+//      gecerlidir (bus modu). KV yoksa otomatik devreye girer.
+//   3) Bellek — yalniz gelistirme (sunucu yeniden baslayinca odalar silinir).
 'use strict';
 
 const ROOM_TTL_SEC = 60 * 60 * 6;      // 6 saat
@@ -11,8 +13,12 @@ const MAX_QUEUE = 20;
 
 const KV_URL = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/$/, '');
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || '';
+// Ucretsiz mesaj hatti (hesap gerektirmez). Kapatmak icin LUPIN_PARTY_BUS="" yapilir.
+const BUS = (process.env.LUPIN_PARTY_BUS === undefined ? 'https://ntfy.sh' : String(process.env.LUPIN_PARTY_BUS)).replace(/\/$/, '');
+const BUS_TOPIC_PREFIX = process.env.LUPIN_PARTY_TOPIC_PREFIX || 'lupin-room-';
+const BUS_WINDOW = '2m';   // ntfy "since" sure formatini kabul eder (unix ts degil)
 
-// Bellek yedegi (KV yoksa)
+// Bellek yedegi (KV ve bus yoksa)
 const memory = new Map();
 
 function cors(res) {
@@ -71,8 +77,63 @@ async function kvSet(key, value, ttl) {
   return true;
 }
 
+/** Ucretsiz bus: son durum yazilmis deger (last-write-wins) okunur. */
+async function busGet(room) {
+  if (!BUS) return null;
+  // Not: ntfy `since` degerini Unix timestamp olarak DEGERIL, sure ("2m") olarak
+  // yorumluyor; sayisel deger verilince liste bos donuyor.
+  const res = await fetch(`${BUS}/${BUS_TOPIC_PREFIX}${room}/json?poll=1&since=${BUS_WINDOW}&limit=60`, {
+    signal: AbortSignal.timeout(6000)
+  });
+  if (!res.ok) throw new Error(`bus get ${res.status}`);
+  // ntfy pencere bosken 200 + BOS govde doner: JSON.parse patlamasin
+  const text = await res.text();
+  if (!text || !text.trim()) return null;
+  let list = null;
+  try { list = JSON.parse(text); } catch { return null; }
+  // ntfy tek mesajda dizi degil TEK obje doner
+  const items = Array.isArray(list) ? list : (list ? [list] : []);
+  if (!items.length) return null;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const m = items[i];
+    if (m.event && m.event !== 'message') continue;
+    try {
+      const parsed = JSON.parse(m.message || '');
+      if (parsed && parsed.room === room) return parsed;
+    } catch {}
+  }
+  return null;
+}
+
+async function busSet(room, value) {
+  if (!BUS) return false;
+  const res = await fetch(`${BUS}/${BUS_TOPIC_PREFIX}${room}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify(value),
+    signal: AbortSignal.timeout(6000)
+  });
+  if (!res.ok) throw new Error(`bus set ${res.status}`);
+  return true;
+}
+
 async function roomGet(room) {
-  if (KV_URL && KV_TOKEN) return kvGet(`lupin:party:${room}`);
+  if (KV_URL && KV_TOKEN) {
+    try { return await kvGet(`lupin:party:${room}`); } catch { /* bus'a dus */ }
+  }
+  if (BUS) {
+    try {
+      // ntfy yeni mesaji ~1-2 sn gecikmeyle indeksler: yeni kurulan odada ilk
+      // okuma bos doner. 3 denemeli kademeli bekleme ile ilk join de yakalanir.
+      let v = null;
+      for (const wait of [0, 600, 1500]) {
+        if (wait) await new Promise((r) => setTimeout(r, wait));
+        v = await busGet(room);
+        if (v) break;
+      }
+      return v;
+    } catch { /* bellege dus */ }
+  }
   const hit = memory.get(room);
   if (!hit) return null;
   if (Date.now() > hit.expires) { memory.delete(room); return null; }
@@ -80,7 +141,12 @@ async function roomGet(room) {
 }
 
 async function roomSet(room, value) {
-  if (KV_URL && KV_TOKEN) return kvSet(`lupin:party:${room}`, value, ROOM_TTL_SEC);
+  if (KV_URL && KV_TOKEN) {
+    try { return await kvSet(`lupin:party:${room}`, value, ROOM_TTL_SEC); } catch { /* bus'a dus */ }
+  }
+  if (BUS) {
+    try { return await busSet(room, value); } catch { /* bellege dus */ }
+  }
   memory.set(room, { value, expires: Date.now() + ROOM_TTL_SEC * 1000 });
   return true;
 }
@@ -135,7 +201,10 @@ module.exports = async function handler(req, res) {
   try {
     state = await roomGet(room);
   } catch (e) {
-    return json(res, 503, { error: 'Oda deposu erişilemiyor', detail: String(e && e.message) });
+    // Hicbir depo erisilemiyorsa oda sessizce calisir (katilimci yine de
+    // deep link ile konuma oturur) — 503 yerine bos oda dondur.
+    console.warn('[Room] store okunamadi:', e && e.message);
+    state = null;
   }
 
   if (action === 'host') {

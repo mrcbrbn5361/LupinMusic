@@ -146,8 +146,16 @@ export class PartyService {
     this.stopTimers();
     this.room = code;
     this.role = 'follower';
-    const first = await this.call('join');
-    if (!first || (first as { closed?: boolean }).closed) {
+    // Ucretsiz mesaj hatti (bus) yeni yazilan odayi ~1-3 sn sonra gosterir:
+    // ilk deneme bos gelirse birkac kez yeniden dene (host her 2 sn'de yaziyor).
+    let first: PartyState | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 2500));
+      first = await this.call('join');
+      if (first && !(first as { closed?: boolean }).closed) break;
+      first = null;
+    }
+    if (!first) {
       this.leaveLocal();
       return false;
     }
