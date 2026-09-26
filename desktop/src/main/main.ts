@@ -87,8 +87,24 @@ function handleDeepLink(rawUrl: string): void {
     const videoId = parsed.searchParams.get('id') || parsed.searchParams.get('v') || parsed.pathname.replace(/^\//, '');
     const seekTime = Number(parsed.searchParams.get('t')) || 0;
     if (!videoId) return;
+    const send = (meta?: { title?: string; artist?: string; duration?: number }) => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
+        if (meta) {
+          // Zenginlestirme AYRI aksiyon: oynatmayi yeniden baslatmasin,
+          // sadece baslik/sure bilgisini doldursun.
+          mainWindow.webContents.send('bot:remote-control', 'playTrackMeta', { id: videoId, ...meta });
+        } else {
+          mainWindow.webContents.send('bot:remote-control', 'playTrack', { id: videoId, seek: seekTime });
+        }
+      }
+    };
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
-      mainWindow.webContents.send('bot:remote-control', 'playTrack', { id: videoId, seek: seekTime });
+      // Once hemen baslat (gecikme olmasin), sonra gercek baslik/sure ile
+      // zenginlestir: kullanici "Lupin Track / 00:00" gormesin.
+      send();
+      innerTube.getPlayer(videoId).then((info: { title?: string; artist?: string; duration?: number } | null) => {
+        if (info) send({ title: info.title, artist: info.artist, duration: info.duration });
+      }).catch(() => {});
     } else {
       pendingDeepLinkUrl = rawUrl;
     }

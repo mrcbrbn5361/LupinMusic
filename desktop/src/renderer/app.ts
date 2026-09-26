@@ -159,6 +159,10 @@ let pendingClearTimer: any = null;
 let lastAdToastId: string | null = null;
 // Gecis sirasinda verilen seek hedefi: motor onaylayinca tekrar uygulanir (yutulmaz)
 let pendingSeek: { t: number; at: number } | null = null;
+// Parti / deep-link katilim konumu: on-rol reklaminda mp.seekTo icerik zaman
+// cizelgesini bozdugu icin motor seek'i yutar; bu yuzden hedef konum
+// reklam BITINCE, konum dogrulanana kadar yeniden uygulanir.
+let joinSeek: { id: string; t: number; at: number; tries: number } | null = null;
 // Kullanicinin bilerek duraklatip duraklatmadigi (tekrar-bir karari icin)
 let userPaused: boolean = false;
 
@@ -364,6 +368,8 @@ async function playTrack(track: Track, queueContext?: Track[]) {
   const gen = radioGen;
   isTrackEnding = false;
   lastRelatedVideoId = '';
+  // Kullanici elle baska bir parca sectiyse bekleyen parti konumu gecersizdir
+  if (!joinSeek || joinSeek.id !== track.id) joinSeek = null;
 
   if (queueContext && queueContext.length > 1) {
     currentQueue = queueContext.map(t => ({ ...t, source: 'pick' }));
@@ -631,7 +637,23 @@ window.api?.onPlaybackUpdate?.((playback: {
       lastAdToastId = currentTrack.id;
       showToast('Reklam atlanıyor…');
     }
+    // Reklam slotunda seek YAPILMAZ (içerik zaman çizelgesini bozar);
+    // joinSeek reklam bitince aşağıda uygulanacak.
     return;
+  }
+  // Parti katilim konumu: reklam sonrasi gercek icerikte hedefe otur.
+  // (deep link / lupin.parti?t=90 -> 01:30'dan devam)
+  if (joinSeek && playback.videoId === joinSeek.id) {
+    const delta = (playback.currentTime || 0) - joinSeek.t;
+    if (Math.abs(delta) <= 1.5) {
+      joinSeek = null;
+    } else if ((playback.duration || 0) > 0 && joinSeek.tries < 20 && Date.now() - joinSeek.at < 45000) {
+      // Yalniz video HAZIR oldugunda dene: yuklenme sirasinda atilan seek'ler
+      // loadVideoById tarafindan yutuluyor ve deneme hakki bitiyordu
+      joinSeek.tries += 1;
+      const target = joinSeek.t;
+      window.api?.seek?.(target).catch(() => {});
+    }
   }
   // Motor baska bir videoya gectiyse (biz istedik ya da disaridan autoplay):
   // - Bekledigimiz videoyu gorduk: gecis onaylandi (esitlik disinda da temizle ki
@@ -1238,11 +1260,35 @@ window.api?.onRemoteControl?.((action: string, payload?: any) => {
     };
     playTrack(trackToPlay).then(() => {
       if (typeof payload.seek === 'number' && payload.seek > 0) {
+        // Reklam yutarsa motor poll'da tekrar tekrar uygular (joinSeek)
+        joinSeek = { id: trackToPlay.id, t: payload.seek, at: Date.now(), tries: 0 };
         pendingSeek = { t: payload.seek, at: Date.now() };
         window.api?.seek?.(payload.seek);
       }
     });
-    showToast('🚀 Lupin Party şarkısına bağlanıldı!');
+    const hasSeek = typeof payload.seek === 'number' && payload.seek > 0;
+    showToast(hasSeek
+      ? `🚀 Lupin Party • ${formatTime(payload.seek)} konumundan devam ediliyor`
+      : '🚀 Lupin Party şarkısına bağlanıldı!');
+  } else if (action === 'playTrackMeta' && payload && payload.id) {
+    // Deep link zenginlestirmesi: oynatma YENIDEN baslatilmaz, sadece
+    // baslik/sanatci/sure bilgisi doldurulur (arayuzde 00:00 / Lupin Track kalmasin)
+    if (currentTrack && currentTrack.id === payload.id) {
+      let changed = false;
+      if (payload.title && currentTrack.title !== payload.title) { currentTrack.title = payload.title; changed = true; }
+      if (payload.artist && currentTrack.artist !== payload.artist) { currentTrack.artist = payload.artist; changed = true; }
+      if (payload.duration && currentTrack.duration !== payload.duration) {
+        currentTrack.duration = payload.duration;
+        currentTrack.durationFormatted = formatTime(payload.duration);
+        changed = true;
+      }
+      if (changed) {
+        applyCurrentTrackUI(currentTrack);
+        if (currentQueue[currentIndex]) {
+          currentQueue[currentIndex] = { ...currentQueue[currentIndex] };
+        }
+      }
+    }
   }
 });
 
