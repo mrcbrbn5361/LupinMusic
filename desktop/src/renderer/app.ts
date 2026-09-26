@@ -1019,7 +1019,7 @@ function renderQueueList() {
         <div class="queue-item-title">${esc(track.title)}${radioTag}</div>
         <div class="queue-item-artist">${esc(track.artist)}</div>
       </div>
-      <span style="font-size:11px; color:var(--text-muted);">${esc(track.durationFormatted || '')}</span>
+      <span class="queue-item-duration">${esc(track.durationFormatted || (track.duration ? formatTime(track.duration) : ''))}</span>
     `;
 
     item.addEventListener('click', () => {
@@ -1185,13 +1185,16 @@ searchInput.addEventListener('input', () => {
     const gen = ++browseGen;
     viewTitle.textContent = `🔍 "${q}" için Arama Sonuçları`;
     cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:20px;">Aranıyor...</div>';
-    const res = await window.api.search(q);
+    const res = await window.api.search({ query: q, videos: showVideoVersions });
     if (gen !== browseGen) return;
     renderSearchResults(res, q);
   }, 350);
 });
 
-/** Arama ciktisini bolumlere boler: sarkilar / video / album / sanatci / liste. */
+// Video versiyonlari KISA SURELI opt-in (arama sonunda gorunur, 45 sn sonra kapanir)
+let showVideoVersions = false;
+let videoFlagTimer: any = null;
+
 function renderSearchResults(res: any, query: string): void {
   const songs: Track[] = res?.songs || [];
   const videos: Track[] = res?.videos || [];
@@ -1219,9 +1222,30 @@ function renderSearchResults(res: any, query: string): void {
   if (videos.length) {
     sections.push(sectionHtml('🎬 Video Versiyonları', videos, renderSongCardHtml, 'video'));
   }
+  sections.push(`<div class="search-footer-row">
+    <button class="ctrl-btn video-toggle-btn" id="btnToggleVideoVersions">${showVideoVersions ? '🎬 Videoları gizle' : '🎬 Video versiyonlarını göster'}</button>
+    <span class="search-hint">Video versiyonları arama sonuçlarını seyrek gösterir; varsayılan yalnızca müziktir.</span>
+  </div>`);
   cardsGrid.innerHTML = sections.join('');
   wireSongCards(songs.concat(videos));
   wireBrowseCards();
+
+  const vt = document.getElementById('btnToggleVideoVersions');
+  if (vt) {
+    vt.addEventListener('click', () => {
+      showVideoVersions = !showVideoVersions;
+      if (videoFlagTimer) clearTimeout(videoFlagTimer);
+      // 45 sn sonra otomatik kapanir (kisa sureli opt-in)
+      videoFlagTimer = window.setTimeout(() => {
+        showVideoVersions = false;
+        videoFlagTimer = null;
+        const q = searchInput.value.trim();
+        if (q) searchInput.dispatchEvent(new Event('input'));
+      }, 45000);
+      const q = searchInput.value.trim();
+      if (q) searchInput.dispatchEvent(new Event('input'));
+    });
+  }
 }
 
 /** Bolumlenmis HTML'deki sarki kartlarina tiklanma davranisini baglar. */
@@ -1257,11 +1281,14 @@ function sectionHtml(title: string, items: any[], itemHtml: (t: any) => string, 
 
 function renderSongCardHtml(track: Track): string {
   const badge = track.isVideo ? '<div class="card-type-badge">VIDEO</div>' : '';
+  const durBadge = track.duration && track.duration > 0
+    ? `<div class="card-duration">${formatTime(track.duration)}</div>` : '';
   return `
     <div class="music-card" data-id="${esc(track.id)}" data-title="${esc(track.title)}" data-artist="${esc(track.artist)}" data-album="${esc(track.album || '')}" data-duration="${track.duration || 0}">
       <div class="card-thumb-wrap">
         <img src="${esc(track.thumbnail || './logo.png')}" data-thumb="${esc(track.thumbnail || '')}" data-vid="${esc(track.id)}" class="card-thumb" alt="${esc(track.title)}" loading="lazy" onerror="lupinThumb(this)" />
         ${badge}
+        ${durBadge}
         <div class="card-play-overlay">
           <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
         </div>

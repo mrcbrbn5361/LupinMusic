@@ -11,7 +11,7 @@ const api = {
   close: () => ipcRenderer.send('window:close'),
 
   // Music Search & Explore
-  search: (query: string) => ipcRenderer.invoke('music:search', query),
+  search: (payload: { query: string; videos?: boolean } | string) => ipcRenderer.invoke('music:search', payload),
   getExplore: () => ipcRenderer.invoke('music:explore'),
   getRelatedTracks: (videoId: string) => ipcRenderer.invoke('music:getRelated', videoId),
   browse: (browseId: string) => ipcRenderer.invoke('music:browse', browseId),

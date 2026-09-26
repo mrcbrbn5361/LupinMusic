@@ -9,6 +9,8 @@
   album?: string;
   albumId?: string;
   isVideo?: boolean;
+  /** YouTube icerik turu (MUSIC_VIDEO_TYPE_* / 'video' gibi) — tur filtresi icin */
+  type?: string;
 }
 
 export interface SearchResult {
@@ -40,11 +42,73 @@ export interface BrowseDetail {
 export interface PlayerResult extends Song {
   streamUrl?: string;
   lyrics?: string;
+  /** true = reklam ses akışına gömülü (reklam destekli parça) */
+  isAdSupported?: boolean;
 }
 
 const BASE_URL = 'https://music.youtube.com/youtubei/v1';
+const AD_SUPPORT_CACHE_MS = 90 * 1000;
 
 export class InnerTubeService {
+  /** videoId -> { at, isAdSupported } (kisa sureli onbellek) */
+  private playerCache = new Map<string, { at: number; isAdSupported: boolean }>();
+
+  /** O parca reklam destekli mi? (60 sn onbellek, aksi halde player'a sorar) */
+  public async isAdSupported(videoId: string): Promise<boolean> {
+    if (!videoId) return false;
+    const hit = this.playerCache.get(videoId);
+    if (hit && Date.now() - hit.at < AD_SUPPORT_CACHE_MS) return hit.isAdSupported;
+    const info = await this.getPlayer(videoId);
+    return !!info?.isAdSupported;
+  }
+
+  /**
+   * Ayni sarki/sanatci icin rekamsiz (ads-supported olmayan) kaynak bulur.
+   * Adimlar: tam baslik sifari -> gerekirse sanatci+baslik -> ilk uygun aday.
+   * Bulunamazsa null doner (cagiran yer mevcut kaynakta kalir).
+   */
+  public async findCleanSource(videoId: string, title: string, artist: string): Promise<string | null> {
+    if (!videoId || !title) return null;
+    const clean = title.replace(/\s*[([][^)\]]*[)\]]\s*$/g, '').replace(/\s*[-–|]\s*(official|video|lyrics?)\s*$/i, '').trim();
+    const q1 = `${clean} ${artist || ''}`.trim();
+    const q2 = `${artist || ''} ${clean}`.trim();
+
+    const candidates: Song[] = [];
+    for (const q of [q1, q2]) {
+      const res = await this.search(q, 'songs');
+      candidates.push(...(res.songs || []));
+      if (candidates.length >= 8) break;
+    }
+
+    const seen = new Set<string>([videoId]);
+    const titleKey = clean.toLowerCase();
+    for (const c of candidates) {
+      if (!c.id || seen.has(c.id)) continue;
+      seen.add(c.id);
+      // Ayni sarki mi? (baslik benzerligi + sure/sanatci eslesmesi)
+      const tOk = this.similarTitle(titleKey, c.title.toLowerCase());
+      const aOk = !artist || !c.artist || c.artist.toLowerCase().includes(artist.toLowerCase().split(/[\s,]+/)[0]);
+      if (!tOk || !aOk) continue;
+      if (c.isVideo) continue;
+      if (await this.isAdSupported(c.id)) continue;
+      return c.id;
+    }
+    return null;
+  }
+
+  private similarTitle(a: string, b: string): boolean {
+    const norm = (s: string) => s
+      .replace(/[()[\]]/g, ' ')
+      .replace(/\b(feat|ft|with|official|video|audio|lyrics?|hd|hq|remaster(ed)?|live|explicit)\b/gi, ' ')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ').trim();
+    const x = norm(a);
+    const y = norm(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    return x.includes(y) || y.includes(x);
+  }
+
   private formatDuration(sec: number): string {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
@@ -138,14 +202,14 @@ export class InnerTubeService {
 
     const col0 = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text;
     const col1 = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text;
-    const title = this.getText(col0) || 'Ä°simsiz ParÃ§a';
+    const title = this.getText(col0) || 'İsimsiz Parça';
     let artist = this.getText(col1) || 'Lupin Music';
 
     let duration = 0;
     let album = '';
 
     if (artist) {
-      const parts = artist.split(/[â€¢Â·]/).map((p: string) => p.trim()).filter(Boolean);
+      const parts = artist.split(/[\u2022\u00B7]/).map((p: string) => p.trim()).filter(Boolean);
       const durIdx = parts.findIndex(p => /^\d+:\d{2}(:\d{2})?$/.test(p));
       if (durIdx !== -1) {
         duration = this.parseDuration(parts[durIdx]);
@@ -179,7 +243,7 @@ export class InnerTubeService {
    * Arama: sarki + video versiyonu + sanatci + album + oynatma listesi.
    * songs+videos params tek istekte; carousel/immaturer afisleri de taranir.
    */
-  public async search(query: string, filter: string = 'songs'): Promise<SearchResult> {
+  public async search(query: string, filter: string = 'songs', includeVideos: boolean = false): Promise<SearchResult> {
     const results: SearchResult = {
       songs: [],
       videos: [],
@@ -195,34 +259,68 @@ export class InnerTubeService {
       // videos: EgWKAQIQAWoUEAMQCBAJEAoQBQ%3D%3D
       const body: Record<string, any> = { query };
       if (filter === 'songs') {
-        body.params = 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D,EgWKAQIQAWoUEAMQCBAJEAoQBQ%3D%3D';
+        // YALNIZCA muzik: 'videos' params'i birlestirilirse YouTube video
+        // sonuclarini da karisik getirir (kullanici sadece sarki istiyor).
+        body.params = includeVideos
+          ? 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D,EgWKAQIQAWoUEAMQCBAJEAoQBQ%3D%3D'
+          : 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D';
       } else if (filter === 'videos') {
         body.params = 'EgWKAQIQAWoUEAMQCBAJEAoQBQ%3D%3D';
       }
 
-      const data: any = await this.request('search', body);
-      const contents = data?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents
-        || data?.contents?.sectionListRenderer?.contents
-        || [];
+      // Sanatci / album / oynatma listesi afisleri sadece 'videos' params'li
+      // istekte geliyor. Bu yuzden iki istek PARALEL atilir: sarkilar yalnizca
+      // songs isteğinden, browse kartlari videos isteğinden (sarki listesine
+      // hicbir sey karismaz).
+      const browseBody: Record<string, any> = { query, params: 'EgWKAQIQAWoUEAMQCBAJEAoQBQ%3D%3D' };
+      const needBrowse = !includeVideos && filter === 'songs';
+      const [data, browseData] = await Promise.all([
+        this.request('search', body),
+        needBrowse ? this.request('search', browseBody).catch(() => null) : Promise.resolve(null)
+      ]);
 
+      const sectionsOf = (d: any): any[] => (d?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]
+        ?.tabRenderer?.content?.sectionListRenderer?.contents) || d?.contents?.sectionListRenderer?.contents || [];
+
+      // Browse afisleri: sadece browseEndpoint tasiyan ogeler alinir
+      if (browseData) {
+        for (const section of sectionsOf(browseData)) {
+          for (const item of (section.itemSectionRenderer?.contents || [])) {
+            const browse = this.parseBrowseItem(item);
+            if (!browse) continue;
+            if (browse.type === 'artist') results.artists.push(browse);
+            else if (browse.type === 'album') results.albums.push(browse);
+            else results.playlists.push(browse);
+          }
+          const carousel = section.musicCarouselShelfRenderer
+            || section.musicImmersiveCarouselShelfRenderer
+            || section.musicMultiRowListItemRenderer?.musicCarouselShelfRenderer;
+          if (carousel) this.parseCarousel(carousel, results);
+        }
+      }
+
+      const contents = sectionsOf(data);
       for (const section of contents) {
-        // Shelf (sarki / video listesi)
+        // Shelf (sarki listesi)
         const shelf = section.musicShelfRenderer;
         if (shelf && Array.isArray(shelf.contents)) {
           const videoShelf = /video|clip|official/i.test(this.getText(shelf.title));
           for (const item of shelf.contents) {
             const song = this.parseSongItem(item);
             if (!song) continue;
-            if (videoShelf) {
+            if (videoShelf && includeVideos) {
               song.isVideo = true;
               results.videos.push(song);
+            } else if (videoShelf) {
+              // Video versiyonlari kapali: sadece sarki olarak alinir
+              results.songs.push(song);
             } else {
               results.songs.push(song);
             }
           }
         }
 
-        // ItemSection: sarki, video, sanatci, album ya da oynatma listesi
+        // ItemSection: sarki, sanatci, album ya da oynatma listesi
         const itemSection = section.itemSectionRenderer?.contents;
         if (Array.isArray(itemSection)) {
           for (const item of itemSection) {
@@ -235,12 +333,11 @@ export class InnerTubeService {
             }
             const song = this.parseSongItem(item);
             if (!song) continue;
-            if (song.isVideo) results.videos.push(song);
+            if (song.isVideo && includeVideos) results.videos.push(song);
             else results.songs.push(song);
           }
         }
 
-        // Album / sanatci / oynatma listesi afisleri
         const carousel = section.musicCarouselShelfRenderer
           || section.musicImmersiveCarouselShelfRenderer
           || section.musicMultiRowListItemRenderer?.musicCarouselShelfRenderer;
@@ -387,8 +484,12 @@ export class InnerTubeService {
       seen.add(key);
       return true;
     });
-    results.songs = dedupe(results.songs);
-    results.videos = dedupe(results.videos);
+    // TUR FILTRESI: reklam/sponsorlu, canli, short, bölüm/podcast ve video
+    // etiketli oge arama sonucunda yer almaz.
+    const JUNK = /\b(reklam|ad\b|ads?\b|sponsored|promoted|shorts?|live|canl[ıi]|podcast|b[öo]l[üu]m|episode|fragman|trailer|reaction|cover|remix|sped up|slowed)\b/i;
+    const typeBad = (t: string) => /^(video|MUSIC_VIDEO_TYPE_)/i.test(t || '');
+    results.songs = dedupe(results.songs).filter((t) => !t.isVideo && !typeBad(String(t.type || '')) && !JUNK.test(`${t.title} ${t.artist || ''}`) && !JUNK.test(t.album || ''));
+    results.videos = dedupe(results.videos).filter((t) => !JUNK.test(`${t.title} ${t.artist || ''}`));
 
     const firstArtist = (results.songs[0]?.artist || '').toLowerCase();
     if (firstArtist && q.includes(firstArtist.split(/[\s,]+/)[0])) {
@@ -398,6 +499,17 @@ export class InnerTubeService {
         return am - bm;
       });
     }
+    const dedupeBrowse = (list: BrowseItem[]): BrowseItem[] => {
+      const ids = new Set<string>();
+      return list.filter((b) => {
+        if (!b.browseId || ids.has(b.browseId)) return false;
+        ids.add(b.browseId);
+        return true;
+      }).slice(0, 8);
+    };
+    results.artists = dedupeBrowse(results.artists);
+    results.albums = dedupeBrowse(results.albums);
+    results.playlists = dedupeBrowse(results.playlists);
     results.songs = results.songs.slice(0, 25);
     results.videos = results.videos.slice(0, 12);
   }
@@ -501,14 +613,33 @@ export class InnerTubeService {
       const durationSec = parseInt(vd.lengthSeconds || '0', 10);
       const thumbnail = this.getThumbnail(vd.thumbnail?.thumbnails, videoId);
 
+      // Reklam destekli parça tespiti: bu parçalarda reklam SES AKIŞININ
+      // içine gömülüdür, arayüzü gizlemek yetmez. İşaretler:
+      //  - musicVideoType: 'MUSIC_VIDEO_TYPE_ATV' (reklamlı müzik videosu)
+      //  - adFormats / adStreamData / playerAds / adPlacements
+      //  - mediaCommonConfig.mediaUstreamerRequestConfig (SABR reklam yolu)
+      const isAdSupported = !!(vd.musicVideoType
+        || sd.adFormats?.length
+        || data.adStreamData
+        || data.playerAds
+        || data.adPlacements?.length
+        || data.playerConfig?.mediaCommonConfig?.mediaUstreamerRequestConfig);
+
+      this.playerCache.set(videoId, { at: Date.now(), isAdSupported });
+      if (this.playerCache.size > 200) {
+        const first = this.playerCache.keys().next().value;
+        if (first) this.playerCache.delete(first);
+      }
+
       return {
         id: videoId,
-        title: vd.title || 'Bilinmeyen ÅarkÄ±',
+        title: vd.title || 'Bilinmeyen Şarkı',
         artist: vd.author || 'Lupin Music',
         thumbnail: thumbnail || './logo.png',
         duration: durationSec,
         durationFormatted: this.formatDuration(durationSec),
-        streamUrl: bestStream
+        streamUrl: bestStream,
+        isAdSupported
       };
     } catch (err) {
       console.error('[InnerTube] getPlayer error:', err);
@@ -518,7 +649,7 @@ export class InnerTubeService {
 
   public async getExplore(): Promise<Song[]> {
     // Curated high quality trending music
-    const res = await this.search('Trend TÃ¼rkÃ§e Pop MÃ¼zik', 'songs');
+    const res = await this.search('Trend Türkçe Pop Müzik', 'songs');
     if (res.songs.length >= 8) {
       return res.songs.slice(0, 24);
     }
@@ -542,7 +673,7 @@ export class InnerTubeService {
       const title = this.getText(r.title) || 'Lupin Track';
       let artist = this.getText(r.longBylineText) || this.getText(r.shortBylineText) || 'Lupin Audio';
       if (artist) {
-        const parts = artist.split(/[â€¢Â·]/).map((p: string) => p.trim()).filter(Boolean);
+        const parts = artist.split(/[\u2022\u00B7]/).map((p: string) => p.trim()).filter(Boolean);
         artist = parts[0] || artist;
       }
 
@@ -576,16 +707,31 @@ export class InnerTubeService {
           playlistId,
           isAudioOnly: true
         });
-        const songs = this.parseRelatedPanel(data, videoId);
+        // Radyo listesi de ayni tur filtresinden gecer: reklam/spam, video
+        // etiketli ve suresiz oge kuyruga girmez.
+        const songs = this.parseRelatedPanel(data, videoId).filter((s) => this.isListenable(s));
         if (songs.length > 0) return songs;
       } catch (err) {
         console.warn('[InnerTube] getRelatedTracks error:', err);
       }
     }
 
-    // Fallback: EÄŸer next boÅŸ dÃ¶nerse popÃ¼ler parÃ§alardan yedek liste getir
+    // Fallback: Eğer next boş dönerse popüler parçalardan yedek liste getir
     const fallback = await this.getExplore();
-    return fallback.filter(s => s.id !== videoId);
+    return fallback.filter(s => s.id !== videoId && this.isListenable(s));
+  }
+
+  /**
+   * Kuyruk/ara sonucuna girebilir mi? (MUST: reklam/spam ve eksik sure elenir)
+   * Arama sonucu filtresiyle ayni kural.
+   */
+  private isListenable(t: Song): boolean {
+    if (!t || !t.id || !t.title) return false;
+    if (t.isVideo) return false;
+    if (/^(video|MUSIC_VIDEO_TYPE_)/i.test(String(t.type || ''))) return false;
+    const junk = /\b(reklam|ad\b|ads?\b|sponsored|promoted|shorts?|live|canlı|podcast|bölüm|episode|fragman|trailer|reaction|sped up|slowed)\b/i;
+    if (junk.test(`${t.title} ${t.artist || ''} ${t.album || ''}`)) return false;
+    return true;
   }
 }
 

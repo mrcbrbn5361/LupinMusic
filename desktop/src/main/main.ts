@@ -50,6 +50,25 @@ audioEngine.setStreamProvider(async (videoId: string) => {
     return null;
   }
 });
+// Reklam destekli parcalarda reklam ses akisinin icindedir: ayni sarki icin
+// rekamsiz karsilik varsa motor oraya gecer, yoksa reklam sessize alinir.
+audioEngine.setCleanSourceResolver(
+  (videoId: string) => innerTube.findCleanSource(
+    videoId,
+    currentTrack?.title || '',
+    currentTrack?.artist || ''
+  ),
+  (oldId: string, newId: string) => {
+    console.log(`[Main] source swapped (ad-free): ${oldId} -> ${newId}`);
+    if (currentTrack && currentTrack.id === oldId) {
+      const info = innerTube.getPlayer(newId);
+      currentTrack = { ...currentTrack, id: newId };
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('player:track-changed', currentTrack);
+      }
+    }
+  }
+);
 
 let currentTrack: Track | null = null;
 // Birlikte Dinle: renderer'in bildirdigi kuyruk + motorun gordugu gercek durum
@@ -470,8 +489,10 @@ ipcMain.on('window:close', () => {
 });
 
 // Music and Streaming IPC
-ipcMain.handle('music:search', async (_event, query: string) => {
-  return innerTube.search(query, 'songs');
+ipcMain.handle('music:search', async (_event, payload: { query: string; videos?: boolean } | string) => {
+  // Video versiyonlari OPT-IN: varsayilan arama yalnizca muzik doner.
+  if (typeof payload === 'string') return innerTube.search(payload, 'songs', false);
+  return innerTube.search(payload?.query || '', 'songs', !!payload?.videos);
 });
 
 // ------------------------------------------------------------------
