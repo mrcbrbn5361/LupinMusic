@@ -5,6 +5,7 @@ import { DiscordRpcManager } from './api/discord-rpc.js';
 import { InnerTubeService } from './api/innertube.js';
 import { AudioEngine } from './api/audio-engine.js';
 import { AppStore } from './store/index.js';
+import { PartyService } from './api/party.js';
 import type { Track, PlaybackStatus, AppSettings } from '../types/index.js';
 
 // Marka adi Electron varsayilani (package.json name) yerine urun adi olur;
@@ -31,12 +32,14 @@ const existingFeatures = app.commandLine.getSwitchValue('enable-features');
 app.commandLine.appendSwitch('enable-features', existingFeatures ? `${existingFeatures},ClientHints,UserAgentClientHint` : 'ClientHints,UserAgentClientHint');
 
 let mainWindow: BrowserWindow | null = null;
-const botServer = new BotServer(9863);
-const store = new AppStore();
+const botServer = new BotServer(9863);const store = new AppStore();
 const initialSettings = store.getSettings();
 const discordRpc = new DiscordRpcManager(initialSettings.discordRpcEnabled, initialSettings.discordAppId);
 const innerTube = new InnerTubeService();
 const audioEngine = new AudioEngine();
+const party = new PartyService();
+// Birlikte Dinle relay adresi (site ile ayni origin; oda + kart sunucusu)
+const PARTY_RELAY = process.env.LUPIN_PARTY_RELAY || 'https://lupinmusic.vercel.app';
 audioEngine.setAdblockEnabled(initialSettings.adblockEnabled !== false).catch(() => {});
 // Aninda baslatma: YT sayfasi isinirken dogrudan akisla sesi hemen ver
 audioEngine.setStreamProvider(async (videoId: string) => {
@@ -49,6 +52,9 @@ audioEngine.setStreamProvider(async (videoId: string) => {
 });
 
 let currentTrack: Track | null = null;
+// Birlikte Dinle: renderer'in bildirdigi kuyruk + motorun gordugu gercek durum
+let partyQueue: { id: string; title: string; artist: string; duration: number }[] = [];
+let partyLocal = { trackId: '', position: 0, playing: false };
 
 // Motor gecisi sirasinda eski videodan gelen bayat raporlari eleme.
 // playTrack istendiginde kurulur, motor yeni videoyu dogrulayinca temizlenir.
@@ -86,7 +92,15 @@ function handleDeepLink(rawUrl: string): void {
     const parsed = new URL(clean);
     const videoId = parsed.searchParams.get('id') || parsed.searchParams.get('v') || parsed.pathname.replace(/^\//, '');
     const seekTime = Number(parsed.searchParams.get('t')) || 0;
+    const room = (parsed.searchParams.get('room') || '').toLowerCase();
     if (!videoId) return;
+    // Parti odasi: host'a katil (senkron room.state -> renderer hizalama)
+    if (room && /^[a-z0-9]{6,20}$/.test(room)) {
+      party.setName(store.getSettings().discordDisplayName || 'Misafir');
+      party.join(room).then((ok) => {
+        console.log(`[Party] deep link join room=${room} ok=${ok}`);
+      }).catch(() => {});
+    }
     const send = (meta?: { title?: string; artist?: string; duration?: number }) => {
       if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
         if (meta) {
@@ -308,6 +322,8 @@ app.whenReady().then(async () => {
     const status: PlaybackStatus = isPlaying ? 'playing' : (currentTrack ? 'paused' : 'stopped');
     const dur = playback.duration || currentTrack?.duration || 0;
     const progress = dur > 0 ? (playback.currentTime / dur) * 100 : 0;
+    // Parti senkronu icin motorun gordugu gercek durum
+    partyLocal = { trackId: currentTrack?.id || '', position: playback.currentTime || 0, playing: isPlaying };
 
     // Reklam sirasinda bot/Discord durumunu dondur: gercek sarkinin konumu korunur.
     // updatedAt yine de tazelenir ki bot bayatlik sanmasin.
@@ -329,6 +345,53 @@ app.whenReady().then(async () => {
       // etse bile bot/RPC o duragi gormuyordu.
       if (playback.paused) {
         discordRpc.update(currentTrack, currentTrack ? 'paused' : 'stopped', playback.currentTime);
+      }
+    }
+  });
+
+  // ------------------------------------------------------------------
+  // Birlikte Dinle (party): host durumu relay'e yazar, katilimci host'tan
+  // hizalanir. Renderer kuyrugu main'e bildirir; uygulama ici ayar gerektirmez.
+  // ------------------------------------------------------------------
+  party.configure({
+    getState: () => ({
+      track: currentTrack ? {
+        id: currentTrack.id,
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+        duration: Math.round(currentTrack.duration || 0)
+      } : null,
+      position: partyLocal.position,
+      playing: partyLocal.playing,
+      queue: partyQueue
+    }),
+    onFollow: (state) => {
+      if (!state.track) return;
+      const action = party.needsCorrection(state, partyLocal.trackId, partyLocal.position, partyLocal.playing);
+      if (action && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('party:sync', action);
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('party:status', {
+          role: 'follower',
+          room: state.room,
+          hostName: state.hostName,
+          listeners: state.listeners || 0,
+          track: state.track,
+          position: state.position,
+          playing: state.playing,
+          closed: false
+        });
+      }
+    },
+    onSnapshot: (snap) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('party:status', snap);
+      }
+    },
+    onClosed: () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('party:closed', { reason: 'host-left' });
       }
     }
   });
@@ -411,6 +474,50 @@ ipcMain.handle('music:search', async (_event, query: string) => {
   return innerTube.search(query, 'songs');
 });
 
+// ------------------------------------------------------------------
+// Birlikte Dinle (party) IPC
+// ------------------------------------------------------------------
+ipcMain.handle('party:host', async (_event, payload: { room?: string; name?: string }) => {
+  if (payload?.name) party.setName(payload.name);
+  const relayOk = await party.host(payload?.room);
+  const room = party.getRoom();
+  return {
+    success: true,
+    relayOk,
+    room,
+    role: 'host',
+    link: room ? `https://lupinmusic.vercel.app/party?room=${room}` : ''
+  };
+});
+
+ipcMain.handle('party:join', async (_event, payload: { room: string; name?: string }) => {
+  if (payload?.name) party.setName(payload.name);
+  const ok = await party.join(payload?.room || '');
+  return { success: ok, role: party.getRole(), room: party.getRoom() };
+});
+
+ipcMain.handle('party:leave', async () => {
+  await party.leave('manual');
+  return { success: true, role: party.getRole() };
+});
+
+ipcMain.handle('party:status', () => ({
+  role: party.getRole(),
+  room: party.getRoom()
+}));
+
+ipcMain.on('party:queue', (_event, queue: { id: string; title: string; artist: string; duration?: number }[]) => {
+  partyQueue = (Array.isArray(queue) ? queue : [])
+    .filter((t) => t && typeof t.id === 'string' && t.id)
+    .slice(0, 20)
+    .map((t) => ({
+      id: String(t.id).slice(0, 20),
+      title: String(t.title || 'Lupin Music').slice(0, 120),
+      artist: String(t.artist || 'Lupin Audio').slice(0, 120),
+      duration: Math.max(0, Math.round(Number(t.duration) || 0))
+    }));
+});
+
 ipcMain.handle('music:explore', async () => {
   return innerTube.getExplore();
 });
@@ -481,13 +588,11 @@ ipcMain.handle('store:getHistory', () => store.getHistory());
 ipcMain.handle('store:addToHistory', (_event, track: Track) => store.addToHistory(track));
 
 // Discord Webhook & Sharing IPC
-ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Track; currentTime?: number; duration?: number; webhookUrl?: string; cardPng?: string }) => {
+ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Track; currentTime?: number; duration?: number; webhookUrl?: string; cardPng?: string; room?: string }) => {
   try {
     const settings = store.getSettings();
-    const webhookUrl = payload.webhookUrl || settings.discordWebhookUrl;
-    if (!webhookUrl || !webhookUrl.startsWith('http')) {
-      return { success: false, error: 'Discord Webhook URL ayarlanmamış.' };
-    }
+    const ownWebhookUrl = payload.webhookUrl || settings.discordWebhookUrl || '';
+    const room = (payload.room || party.getRoom() || '').toLowerCase();
 
     const { track, currentTime = 0, duration = 0, cardPng = '' } = payload;
     const fmt = (sec: number) => {
@@ -500,7 +605,9 @@ ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Tra
     const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
     // Lupin Neon Pink: 0xec4899 (15485081)
     const embedColor = 0xec4899;
-    const partyUrl = `https://lupinmusic.vercel.app/party?id=${track.id}&t=${Math.floor(currentTime)}`;
+    const partyUrl = room
+      ? `https://lupinmusic.vercel.app/party?room=${room}`
+      : `https://lupinmusic.vercel.app/party?id=${track.id}&t=${Math.floor(currentTime)}`;
     const playUrl = `https://lupinmusic.vercel.app/play?id=${track.id}`;
     const logoUrl = 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png';
 
@@ -510,35 +617,65 @@ ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Tra
       components: urls.map((u) => ({ type: 2, style: 5, label: u.label, url: u.url }))
     }]);
 
-    // 1) tercih edilen yol: renderer'da cizilen gorsel kart (PNG) + butonlar
+    // 0) VARSAYILAN YOL: kart relay'i. Webhook URL'si sunucuda kalir;
+    //    kullanici hicbir sey yapmadan calisir (Ayarlar'daki URL sadece
+    //    baska bir kanala gondermek icin gecerli bir gecersdirme).
     if (cardPng) {
-      const form = new FormData();
-      form.append('payload_json', JSON.stringify({
-        username: 'Lupin Music • Birlikte Dinle',
-        avatar_url: logoUrl,
-        // Birlikte Dinle linki metin olarak da atilir (kart gorseli tiklanamaz)
-        content: `🎧 **Birlikte Dinle:** ${partyUrl}\n🚀 **Lupin Uygulamasında Aç:** ${playUrl}`,
-        components: actionRow([
-          { label: '🎧 Birlikte Dinle Partisi', url: partyUrl },
-          { label: '🚀 Lupin Uygulamasında Aç', url: playUrl },
-          { label: '💜 Topluluk Kanalı', url: 'https://discord.gg/Rma8w8JrQH' }
-        ])
-      }));
-      form.append('files[0]', new Blob([Buffer.from(cardPng, 'base64')], { type: 'image/png' }), 'lupin-now-playing.png');
-
-      const cardResp = await fetch(webhookUrl, {
-        method: 'POST',
-        body: form,
-        signal: AbortSignal.timeout(15000)
-      });
-      if (cardResp.ok || cardResp.status === 204) return { success: true };
-
-      const cardErr = await cardResp.text().catch(() => '');
-      console.warn('[DiscordWebhook] Kart gonderimi basarisiz, metin embedine dusuluyor:', cardResp.status, cardErr);
+      try {
+        const relayRes = await fetch(`${PARTY_RELAY}/api/card`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: 'Lupin Music • Birlikte Dinle',
+            avatarUrl: logoUrl,
+            content: `🎧 **Birlikte Dinle:** ${partyUrl}\n🚀 **Lupin Uygulamasında Aç:** ${playUrl}`,
+            components: actionRow([
+              { label: '🎧 Birlikte Dinle Partisi', url: partyUrl },
+              { label: '🚀 Lupin Uygulamasında Aç', url: playUrl },
+              { label: '💜 Topluluk Kanalı', url: 'https://discord.gg/Rma8w8JrQH' }
+            ]),
+            imageBase64: cardPng
+          }),
+          signal: AbortSignal.timeout(20000)
+        });
+        if (relayRes.ok) return { success: true, via: 'relay' };
+        const relayErr = await relayRes.text().catch(() => '');
+        console.warn('[BirlikteDinle] Relay kart gonderimi basarisiz:', relayRes.status, relayErr.slice(0, 160));
+      } catch (e: any) {
+        console.warn('[BirlikteDinle] Relay erisilemiyor:', e?.message);
+      }
     }
 
-    // 2) yedek yol: metin embed'i (kart cizilemezse)
-    const discordPayload = {
+    // 1) Kullanici kendi webhook'unu kurduysa onu kullan
+    if (ownWebhookUrl && ownWebhookUrl.startsWith('http')) {
+      if (cardPng) {
+        const form = new FormData();
+        form.append('payload_json', JSON.stringify({
+          username: 'Lupin Music • Birlikte Dinle',
+          avatar_url: logoUrl,
+          // Birlikte Dinle linki metin olarak da atilir (kart gorseli tiklanamaz)
+          content: `🎧 **Birlikte Dinle:** ${partyUrl}\n🚀 **Lupin Uygulamasında Aç:** ${playUrl}`,
+          components: actionRow([
+            { label: '🎧 Birlikte Dinle Partisi', url: partyUrl },
+            { label: '🚀 Lupin Uygulamasında Aç', url: playUrl },
+            { label: '💜 Topluluk Kanalı', url: 'https://discord.gg/Rma8w8JrQH' }
+          ])
+        }));
+        form.append('files[0]', new Blob([Buffer.from(cardPng, 'base64')], { type: 'image/png' }), 'lupin-now-playing.png');
+
+        const cardResp = await fetch(ownWebhookUrl, {
+          method: 'POST',
+          body: form,
+          signal: AbortSignal.timeout(15000)
+        });
+        if (cardResp.ok || cardResp.status === 204) return { success: true, via: 'own-webhook' };
+
+        const cardErr = await cardResp.text().catch(() => '');
+        console.warn('[DiscordWebhook] Kart gonderimi basarisiz, metin embedine dusuluyor:', cardResp.status, cardErr);
+      }
+
+      // 2) yedek yol: metin embed'i (kart cizilemezse)
+      const discordPayload = {
       username: 'Lupin Music • Birlikte Dinle',
       avatar_url: 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png',
       content: '🎵 **Lupin Music ile Birlikte Dinlemeye Davet Edildiniz!**',
@@ -576,20 +713,23 @@ ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Tra
       ]
     };
 
-    const resp = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(discordPayload),
-      signal: AbortSignal.timeout(10000)
-    });
+      const resp = await fetch(ownWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(discordPayload),
+        signal: AbortSignal.timeout(10000)
+      });
 
-    if (resp.ok || resp.status === 204) {
-      return { success: true };
-    } else {
-      const errText = await resp.text().catch(() => '');
-      console.warn('[DiscordWebhook] Failed sending webhook:', resp.status, errText);
-      return { success: false, error: `Discord HTTP ${resp.status}: ${errText}` };
+      if (resp.ok || resp.status === 204) {
+        return { success: true, via: 'own-webhook' };
+      } else {
+        const errText = await resp.text().catch(() => '');
+        console.warn('[DiscordWebhook] Failed sending webhook:', resp.status, errText);
+        return { success: false, error: `Discord HTTP ${resp.status}: ${errText}` };
+      }
     }
+
+    return { success: false, error: 'Kart sunucusuna ulaşılamadı ve webhook URL’si ayarlanmamış.' };
   } catch (err: any) {
     console.error('[DiscordWebhook] Error sending invite:', err);
     return { success: false, error: err?.message || 'Bilinmeyen hata' };

@@ -83,6 +83,8 @@ const btnSaveDiscordAppId = document.getElementById('btnSaveDiscordAppId') as HT
 const settingDiscordWebhook = document.getElementById('settingDiscordWebhook') as HTMLInputElement;
 const btnSaveDiscordWebhook = document.getElementById('btnSaveDiscordWebhook') as HTMLButtonElement;
 const btnDiscordInvite = document.getElementById('btnDiscordInvite') as HTMLButtonElement;
+const settingDisplayName = document.getElementById('settingDisplayName') as HTMLInputElement;
+const btnSaveDisplayName = document.getElementById('btnSaveDisplayName') as HTMLButtonElement;
 
 // Toast Helper
 function showToast(message: string) {
@@ -358,6 +360,20 @@ function insertAdoptedTrack(t: Track): void {
 
 // Playback Logic
 
+/** Host modundaysek kuyrugu relay'e gonder (katilimcilar ayni sirayi dinlesin). */
+let partyQueueTimer: number | null = null;
+function queueChangedDebounced(): void {
+  if (partyQueueTimer) clearTimeout(partyQueueTimer);
+  partyQueueTimer = window.setTimeout(() => {
+    partyQueueTimer = null;
+    if (partyRole !== 'host') return;
+    const upcoming = currentQueue
+      .slice(currentIndex + 1, currentIndex + 8)
+      .map((t) => ({ id: t.id, title: t.title, artist: t.artist, duration: t.duration || 0 }));
+    window.api?.sendPartyQueue?.(upcoming);
+  }, 700);
+}
+
 /**
  * Şarkı başlatma:
  * - queueContext verilmişse (Beğenilenler, Geçmiş, Keşfet): tüm liste kuyruğa aktarılır, kullanıcı listesini dinler.
@@ -368,6 +384,11 @@ async function playTrack(track: Track, queueContext?: Track[]) {
   const gen = radioGen;
   isTrackEnding = false;
   lastRelatedVideoId = '';
+  // Katilimci elle parca degistiriyor: partiden ayril (host etkilenmez)
+  leavePartyIfFollowing('parça değiştirdin');
+  // Kullanicinin sectigi parca mi, radyo ile eklenen mi
+  // Kuyruk degistiyse host'a bildir (birlikte dinleme kuyrugu paylasilir)
+  queueChangedDebounced();
   // Kullanici elle baska bir parca sectiyse bekleyen parti konumu gecersizdir
   if (!joinSeek || joinSeek.id !== track.id) joinSeek = null;
 
@@ -1164,7 +1185,101 @@ if (btnSaveDiscordWebhook && settingDiscordWebhook) {
   });
 }
 
-// Discord Invite Button (Direct Webhook + Markdown Copy)
+if (btnSaveDisplayName && settingDisplayName) {
+  btnSaveDisplayName.addEventListener('click', async () => {
+    const val = settingDisplayName.value.trim().slice(0, 40);
+    await window.api?.updateSettings({ discordDisplayName: val });
+    showToast(val ? `🎧 Birlikte dinlemede "${val}" olarak görüneceksin` : '⚪ Görünen ad temizlendi');
+  });
+}
+
+// Birlikte Dinle (party) — renderer tarafi
+type PartyRole = 'off' | 'host' | 'follower';
+let partyRole: PartyRole = 'off';
+let partyRoom = '';
+let partyHostName = '';
+let partyListeners = 0;
+let partyBadge: HTMLElement | null = null;
+
+function updatePartyBadge(): void {
+  if (!partyBadge) return;
+  if (partyRole === 'off') { partyBadge.style.display = 'none'; return; }
+  partyBadge.style.display = 'flex';
+  const who = partyRole === 'host'
+    ? (partyListeners > 0 ? `🛡️ Sen hosting • ${partyListeners} kişi dinliyor` : '🛡️ Birlikte dinleme başladı')
+    : `🎧 ${partyHostName || 'Sunucu'} dinletiyor${partyListeners ? ` • ${partyListeners} kişi` : ''}`;
+  partyBadge.textContent = who;
+  partyBadge.title = partyRole === 'follower'
+    ? 'Bu partide şarkı senin seçtiğin gibi değişir. Kendi parçana geçersen partiden ayrılırsın.'
+    : 'Bağlantıyı paylaştıkça dinleyenler senin oynattığın şarkıyı duyar.';
+}
+
+function initParty(): void {
+  partyBadge = document.getElementById('partyBadge');
+  if (partyBadge) {
+    partyBadge.style.display = 'none';
+    partyBadge.addEventListener('click', async () => {
+      if (partyRole === 'off') return;
+      await window.api?.leaveParty?.();
+      partyRole = 'off';
+      partyRoom = '';
+      updatePartyBadge();
+      showToast('🚪 Birlikte dinlemeden ayrıldın');
+    });
+  }
+
+  window.api?.onPartyStatus?.((s: any) => {
+    partyRole = (s?.role as PartyRole) || 'off';
+    partyRoom = s?.room || '';
+    partyHostName = s?.hostName || '';
+    partyListeners = s?.listeners || 0;
+    updatePartyBadge();
+  });
+
+  // Host durumu: katilimci bizi hizalar
+  window.api?.onPartySync?.((action: any) => {
+    if (!action) return;
+    if (action.type === 'track' && action.track) {
+      const t: Track = {
+        id: action.track.id,
+        title: action.track.title || 'Lupin Music',
+        artist: action.track.artist || 'Lupin Audio',
+        thumbnail: `https://i.ytimg.com/vi/${action.track.id}/hqdefault.jpg`,
+        duration: action.track.duration || 0
+      };
+      joinSeek = { id: t.id, t: Math.max(0, Number(action.position) || 0), at: Date.now(), tries: 0 };
+      playTrack(t).then(() => {
+        if (action.playing === false) { userPaused = true; isPlaying = false; updatePlayPauseUI(); window.api?.pause?.(); }
+      });
+      showToast(`🎧 ${partyHostName || 'Sunucu'}: ${t.title}`);
+    } else if (action.type === 'seek') {
+      window.api?.seek?.(Math.max(0, Number(action.position) || 0));
+    } else if (action.type === 'pause') {
+      if (isPlaying) togglePlayPause();
+    } else if (action.type === 'resume') {
+      if (!isPlaying) togglePlayPause();
+    }
+  });
+
+  window.api?.onPartyClosed?.(() => {
+    if (partyRole === 'follower') {
+      partyRole = 'off';
+      partyRoom = '';
+      updatePartyBadge();
+      showToast('🎉 Parti sona erdi — dinlemen devam ediyor');
+    }
+  });
+}
+
+/** Katilimci elle bir sey yaptiysa partiden ayril (host etkilenmez). */
+function leavePartyIfFollowing(reason: string): void {
+  if (partyRole !== 'follower') return;
+  partyRole = 'off';
+  updatePartyBadge();
+  window.api?.leaveParty?.();
+  showToast(`🚪 Partiden ayrıldın (${reason}) — artık kendi listen`);
+}
+
 if (btnDiscordInvite) {
   btnDiscordInvite.addEventListener('click', async () => {
     if (!currentTrack) {
@@ -1172,12 +1287,23 @@ if (btnDiscordInvite) {
       return;
     }
 
+    // 1) Odayi ac (host) — kuyruk bilgisi main'e gider
+    const settings0 = await window.api?.getSettings();
+    const hostRes = await window.api?.hostParty?.({ name: settings0?.discordDisplayName || 'Misafir' });
+    if (hostRes?.room) {
+      partyRole = 'host';
+      partyRoom = hostRes.room;
+      updatePartyBadge();
+    }
+    const roomLink = hostRes?.link || '';
+
     const cur = currentTime || 0;
     const dur = currentDuration || 0;
     const fmt = (s: number) => formatTime(s);
 
-    // Discord markdown message for clipboard (Spotify-tarzı Lupin Party daveti)
-    const inviteMarkdown = `🎧 **Lupin Music • Birlikte Dinleme Partisi**\n🎵 **${currentTrack.title}** — *${currentTrack.artist}*\n⏳ Konum: \`${fmt(cur)} / ${fmt(dur)}\`\n✨ **Lupin Music'te Katıl:** https://lupinmusic.vercel.app/party?id=${currentTrack.id}&t=${Math.floor(cur)}\n🔗 Uygulama İçi Doğrudan Bağlantı: \`lupin://party?id=${currentTrack.id}&t=${Math.floor(cur)}\``;
+    // Davet linki: oda kodu varsa GERCEK senkron olur (katilimci host'u takip eder)
+    const shareUrl = roomLink || `https://lupinmusic.vercel.app/party?id=${currentTrack.id}&t=${Math.floor(cur)}`;
+    const inviteMarkdown = `🎧 **Lupin Music • Birlikte Dinleme**\n🎵 **${currentTrack.title}** — *${currentTrack.artist}*\n⏳ Konum: \`${fmt(cur)} / ${fmt(dur)}\`\n✨ **Katıl:** ${shareUrl}\n🔗 Uygulama içi: \`lupin://party${roomLink ? `?room=${partyRoom}&id=${currentTrack.id}&t=${Math.floor(cur)}` : `?id=${currentTrack.id}&t=${Math.floor(cur)}`}\``;
 
     try {
       await window.api?.copyToClipboard(inviteMarkdown);
@@ -1185,39 +1311,38 @@ if (btnDiscordInvite) {
       navigator.clipboard?.writeText(inviteMarkdown).catch(() => {});
     }
 
-    const settings = await window.api?.getSettings();
-    if (settings?.discordWebhookUrl && settings.discordWebhookUrl.startsWith('http')) {
-      showToast('⏳ Discord kanalına gönderiliyor...');
-      // Gorsel "now playing" karti renderer'da cizilir (Discord'a PNG gonderilir);
-      // cizilemezse ana surec eski metin embed'ine duser.
-      let cardPng = '';
-      try {
-        cardPng = await renderNowPlayingCard({
-          title: currentTrack.title,
-          artist: currentTrack.artist,
-          album: currentTrack.album,
-          coverUrl: currentTrack.thumbnail,
-          currentSec: cur,
-          durationSec: dur,
-          appLabel: 'Lupin Music • Birlikte Dinle'
-        });
-      } catch {
-        cardPng = '';
-      }
-      const res = await window.api?.sendDiscordWebhookInvite({
-        track: currentTrack,
-        currentTime: cur,
-        duration: dur,
-        cardPng
+    // Gorsel kart: once uygulamanin varsayilan kart sunucusuna (relay) gider;
+    // kullanici Ayarlar'da kendi webhook'unu kurduysa o da kullanilir.
+    showToast('⏳ Kart hazırlanıyor...');
+    let cardPng = '';
+    try {
+      cardPng = await renderNowPlayingCard({
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+        album: currentTrack.album,
+        coverUrl: currentTrack.thumbnail,
+        currentSec: cur,
+        durationSec: dur,
+        username: settings0?.discordDisplayName || undefined,
+        appLabel: roomLink ? 'Lupin Music • Birlikte Dinle' : 'Lupin Music'
       });
+    } catch {
+      cardPng = '';
+    }
+    const res = await window.api?.sendDiscordWebhookInvite({
+      track: currentTrack,
+      currentTime: cur,
+      duration: dur,
+      cardPng,
+      room: partyRoom
+    });
 
-      if (res?.success) {
-        showToast('🚀 Birlikte Dinle kartı kanala yollandı ve panoya kopyalandı!');
-      } else {
-        showToast('📋 Davet panoya kopyalandı! (Webhook hatası)');
-      }
+    if (res?.success) {
+      showToast(roomLink
+        ? '🛡️ Birlikte dinleme açıldı! Bağlantı panoya kopyalandı, kart kanala gönderildi.'
+        : '🚀 Birlikte Dinle kartı kanala gönderildi ve panoya kopyalandı!');
     } else {
-      showToast('📋 Birlikte Dinle daveti panoya kopyalandı! (Doğrudan kanala atmak için Ayarlar\'dan Webhook girin)');
+      showToast(`📋 Davet panoya kopyalandı${roomLink ? ` (${shareUrl})` : ''}${res?.error ? ` — kart gönderilemedi` : ''}`);
     }
   });
 }
@@ -1270,8 +1395,7 @@ window.api?.onRemoteControl?.((action: string, payload?: any) => {
     showToast(hasSeek
       ? `🚀 Lupin Party • ${formatTime(payload.seek)} konumundan devam ediliyor`
       : '🚀 Lupin Party şarkısına bağlanıldı!');
-  } else if (action === 'playTrackMeta' && payload && payload.id) {
-    // Deep link zenginlestirmesi: oynatma YENIDEN baslatilmaz, sadece
+  } else if (action === 'playTrackMeta' && payload && payload.id) {    // Deep link zenginlestirmesi: oynatma YENIDEN baslatilmaz, sadece
     // baslik/sanatci/sure bilgisi doldurulur (arayuzde 00:00 / Lupin Track kalmasin)
     if (currentTrack && currentTrack.id === payload.id) {
       let changed = false;
@@ -1405,6 +1529,9 @@ async function initApp() {
     if (typeof settings.discordWebhookUrl === 'string' && settingDiscordWebhook) {
       settingDiscordWebhook.value = settings.discordWebhookUrl;
     }
+    if (typeof settings.discordDisplayName === 'string' && settingDisplayName) {
+      settingDisplayName.value = settings.discordDisplayName;
+    }
   }
 
   const liked = await window.api?.getLikedTracks();
@@ -1415,4 +1542,5 @@ async function initApp() {
   loadExplore();
 }
 
+initParty();
 initApp();

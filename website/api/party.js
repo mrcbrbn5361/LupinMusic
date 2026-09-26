@@ -22,9 +22,13 @@ function fmtPos(sec) {
   return (h > 0 ? `${h}:` : '') + `${mm}:${String(r).padStart(2, '0')}`;
 }
 
-function page(title, artist, thumb, id, t, errorMsg) {
+function page(title, artist, thumb, id, t, errorMsg, room, listeners) {
   const posLabel = t > 0 ? `⏳ Konum: <b>${esc(fmtPos(t))}</b>` : '⏳ Baştan başla';
-  const deepLink = `lupin://party?id=${encodeURIComponent(id)}&t=${t}`;
+  // Oda kodu varsa gercek senkron: uygulama host'a baglanir, parca degisince
+  // katilimcilar da degisir. Yoksa tek parca + konum (eski davranis).
+  const deepLink = room
+    ? `lupin://party?room=${encodeURIComponent(room)}${id ? `&id=${encodeURIComponent(id)}&t=${t}` : ''}`
+    : `lupin://party?id=${encodeURIComponent(id)}&t=${t}`;
   const ogTitle = `🎧 ${title} — Lupin Music'te Katıl`;
   const ogDesc = artist
     ? `Birlikte Dinle Partisi: ${artist} • Lupin Music'te${t > 0 ? ` konum ${fmtPos(t)}` : ''}`
@@ -109,14 +113,19 @@ function page(title, artist, thumb, id, t, errorMsg) {
     <h1>${esc(title)}</h1>
     <p class="artist">${esc(artist || 'Lupin Music')}</p>
     <div class="pos">${posLabel}</div>
+    ${listeners > 0 ? `<div class="pos">👥 Şu anda <b>${esc(String(listeners))} kişi</b> birlikte dinliyor</div>` : ''}
     <div class="actions">
-      <button class="btn btn-primary" id="join" type="button">✨ Lupin Music'te Katıl</button>
+      <button class="btn btn-primary" id="join" type="button">${room ? '✨ Birlikte Dinle' : "✨ Lupin Music'te Katıl"}</button>
       <a class="btn btn-ghost" href="https://github.com/mrcbrbn5361/LupinMusic/releases" target="_blank" rel="noopener">🚀 Uygulamayı İndir</a>
     </div>
     <div class="hint" id="hint">
-      <b>Uygulama açılmadı mı?</b><br />
-      Tarayıcı <b>"Masaüstünde aç"</b> / <b>"Lupin Music'i aç"</b> diye sorarsa izin ver.
-      Henüz yüklü değilse uygulamayı indirip tekrar bu linki aç — kaldığın saniyeden devam eder.
+      ${room
+        ? `<b>Bu bir birlikte dinleme odası.</b><br />
+           Katılınca sunucunun oynattığı şarkıyı <b>o anki konumdan</b> duyacaksın; şarkı değişince sen de değişeceksin.
+           Kendi listeni seçersen partiden ayrılırsın.`
+        : `<b>Uygulama açılmadı mı?</b><br />
+           Tarayıcı <b>"Masaüstünde aç"</b> / <b>"Lupin Music'i aç"</b> diye sorarsa izin ver.
+           Henüz yüklü değilse uygulamayı indirip tekrar bu linki aç — kaldığın saniyeden devam eder.`}
     </div>`}
   </main>
   <p class="foot">© 2026 Lupin Music • MIT • Windows &amp; macOS</p>
@@ -174,16 +183,36 @@ module.exports = async function handler(req, res) {
   let t = parseInt(q.t, 10);
   if (!Number.isFinite(t) || t < 0) t = 0;
   if (t > 86400) t = 0;
+  // Birlikte Dinle odasi (host tarafindan uretilir)
+  const room = String(q.room || '').toLowerCase();
+  const roomOk = /^[a-z0-9]{6,20}$/.test(room) ? room : '';
 
-  const valid = ID_RE.test(id);
-  const meta = valid ? await fetchMeta(id) : null;
+  // Oda odasi: parca bilgisi relay'den gelir (linkte id yoksa da calisir)
+  let live = null;
+  if (roomOk) {
+    try {
+      const r = await fetch(`https://lupinmusic.vercel.app/api/room?room=${roomOk}&clientId=web&action=state`, {
+        signal: AbortSignal.timeout(4000)
+      });
+      if (r.ok) live = await r.json();
+    } catch (e) {}
+    if (live && live.track && !id) {
+      id = String(live.track.id || '');
+      t = Math.max(0, Math.floor(Number(live.position) || 0));
+    }
+  }
+
+  const valid = ID_RE.test(id) || (roomOk && live && live.track);
+  const meta = valid && ID_RE.test(id) ? await fetchMeta(id) : null;
   const html = page(
-    valid ? meta.title : 'Parti bulunamadı',
-    valid ? meta.artist : '',
-    valid ? meta.thumb : '',
+    valid ? ((meta && meta.title) || (live && live.track && live.track.title) || 'Birlikte dinleme') : 'Parti bulunamadı',
+    valid ? ((meta && meta.artist) || (live && live.track && live.track.artist) || '') : '',
+    valid ? ((meta && meta.thumb) || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`) : '',
     valid ? id : '',
     valid ? t : 0,
-    valid ? null : 'Bu davet linki eksik görünüyor'
+    valid ? null : 'Bu davet linki eksik görünüyor',
+    roomOk,
+    roomOk && live && !live.closed ? (live.listeners || 0) : 0
   );
 
   res.statusCode = 200;

@@ -43,4 +43,6 @@ export interface AppSettings {
   volume: number;
   repeat: 'off' | 'all' | 'one';
   shuffle: boolean;
+  /** Birlikte Dinle odasinda gorunecek kullanici adi (partide gosterilir) */
+  discordDisplayName?: string;
 }
