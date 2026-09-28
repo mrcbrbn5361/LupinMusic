@@ -30,7 +30,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build desktop and package macOS DMG & ZIP
+      - name: Build desktop and package macOS ZIP
         run: npm run build:mac --workspace=desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,3 +41,14 @@ jobs:
           name: Lupin-Music-macOS
           path: |
             desktop/release/*.zip
+
+      # main dalindaki her yesil derlemede mac zip'leri v1.0.0 release'ine
+      # eklenir (yerel mac derlemesi yapilmaz; tek kaynak CI'dir).
+      - name: Attach macOS ZIPs to v1.0.0 release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for f in desktop/release/*.zip; do
+            gh release upload v1.0.0 "$f" --clobber
+          done

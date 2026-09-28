@@ -241,9 +241,23 @@ function createWindow(): void {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       webSecurity: true
     }
+  });
+
+  // Gezinme kilidi: uygulama penceresi asla baska sayfaya gitmez.
+  // http(s) dis baglantilar tarayicida acilir, diger semalar reddedilir.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault();
+    if (isSafeExternalUrl(url)) {
+      shell.openExternal(url).catch(() => {});
+    }
+  });
+
+  // Izin kilidi: uygulama mikrofon/kamera/konum/bildirim istemez.
+  mainWindow.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => {
+    callback(false);
   });
 
   // Safe external URL handler

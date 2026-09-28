@@ -1010,6 +1010,18 @@ export class AudioEngine {
     this.win.webContents.setUserAgent(CHROME_UA);
     this.win.webContents.on('before-input-event', (e) => e.preventDefault());
 
+    // Motor penceresi SADECE YouTube Music'e gider; baska gezinme reddedilir.
+    this.win.webContents.on('will-navigate', (event, url) => {
+      try {
+        const host = new URL(url).hostname || '';
+        if (!/(^|\.)(music\.youtube\.com|youtube\.com)$/.test(host)) event.preventDefault();
+      } catch { event.preventDefault(); }
+    });
+    this.win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    this.win.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => {
+      callback(false);
+    });
+
     this.win.webContents.on('did-start-navigation', () => {
       try { this.win?.webContents.executeJavaScript(ADBLOCK_INJECTION_JS, true).catch(() => {}); } catch {}
     });

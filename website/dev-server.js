@@ -5,6 +5,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const party = require('./api/party.js');
+const room = require('./api/room.js');
+const card = require('./api/card.js');
 
 const ROOT = fs.existsSync(path.join(__dirname, 'dist')) ? path.join(__dirname, 'dist') : __dirname;
 const PORT = Number(process.env.PORT) || 4173;
@@ -33,6 +35,14 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/party') {
     const query = Object.fromEntries(url.searchParams.entries());
     return party({ query }, res);
+  }
+  // Uretimdeki /api/room + /api/card serverless fonksiyonlarinin yerel karsiligi
+  // (ayni dosyalar calisir; req.url uzerinden query/body'yi kendileri okur)
+  if (url.pathname === '/api/room') {
+    return room(req, res);
+  }
+  if (url.pathname === '/api/card') {
+    return card(req, res);
   }
   if (url.pathname === '/health') {
     res.setHeader('Content-Type', 'application/json');

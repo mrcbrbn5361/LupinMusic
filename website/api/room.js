@@ -4,8 +4,27 @@
 
 const store = require("./_store.js");
 const { ROOM_RE, MAX_QUEUE, cors, json, sanitizeText, sanitizeId, sanitizeTrack, roomGet, roomSet, isStale, publicView } = store;
+
+// POST yazma hiz siniri: IP basina 60 sn'de 40 yazma (host 2 sn'de yazar = 30/dk)
+const ipWriteHits = new Map();
+function limited(map, key, max) {
+  const now = Date.now();
+  const list = (map.get(key) || []).filter((t) => now - t < 60000);
+  if (list.length >= max) { map.set(key, list); return true; }
+  list.push(now);
+  map.set(key, list);
+  if (map.size > 5000) map.clear();
+  return false;
+}
 module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') { cors(res); res.statusCode = 204; return res.end(); }
+
+  // Yazma islemlerinde IP bazli hiz siniri (oda spam'i onleme).
+  // Okuma (state) serbesttir: katilimcilar 2.5 sn'de bir okur.
+  if (req.method === 'POST') {
+    const ip = (req.headers['x-forwarded-for'] || '').toString().split(',')[0].trim() || 'local';
+    if (limited(ipWriteHits, ip, 40)) return json(res, 429, { error: 'Çok sık istek, lütfen bekleyin' });
+  }
 
   const url = new URL(req.url, 'https://relay.local');
   const body = req.method === 'POST'
