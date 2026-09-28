@@ -1213,22 +1213,38 @@ let partyHostName = '';
 let partyListeners = 0;
 let partyBadge: HTMLElement | null = null;
 
+let lastToastRole: PartyRole = 'off';
+
 function updatePartyBadge(): void {
-  if (!partyBadge) return;
-  if (partyRole === 'off') {
+  // DOM elementini player bar duzenini bozmamasi icin kesinlikle gizli tutuyoruz
+  if (partyBadge) {
     partyBadge.style.display = 'none';
+  }
+
+  if (partyRole === 'off') {
     btnDiscordInvite?.classList.remove('active');
+    if (btnDiscordInvite) {
+      btnDiscordInvite.title = "Discord'a Birlikte Dinle Daveti Gönder / Paylaş";
+    }
+    lastToastRole = 'off';
     return;
   }
-  partyBadge.style.display = 'flex';
+
+  // Buton yalnizca 32x32px ikon olarak mor ışıltı kazanır; asla metin almaz veya genişlemez
   btnDiscordInvite?.classList.add('active');
   const who = partyRole === 'host'
     ? (partyListeners > 0 ? `🛡️ Sen hosting • ${partyListeners} kişi dinliyor` : '🛡️ Birlikte dinleme başladı')
     : `🎧 ${partyHostName || 'Sunucu'} dinletiyor${partyListeners ? ` • ${partyListeners} kişi` : ''}`;
-  partyBadge.textContent = who;
-  partyBadge.title = partyRole === 'follower'
-    ? 'Bu partide şarkı senin seçtiğin gibi değişir. Kendi parçana geçersen partiden ayrılırsın.'
-    : 'Bağlantıyı paylaştıkça dinleyenler senin oynattığın şarkıyı duyar.';
+
+  if (btnDiscordInvite) {
+    btnDiscordInvite.title = who;
+  }
+
+  // Bildirim ekrandan yukaridan toast olarak basilir
+  if (lastToastRole !== partyRole) {
+    showToast(who);
+    lastToastRole = partyRole;
+  }
 }
 
 function initParty(): void {

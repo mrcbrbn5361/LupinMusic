@@ -621,14 +621,16 @@ body {
   transform: translateY(-50%) scale(1);
 }
 
-/* Right Controls (Volume & Visualizer & Queue) */
+/* Right Controls (Volume & Visualizer & Queue) - Mühürlü Genişlik */
 .player-right {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 320px;
-  width: auto;
+  width: 340px;
+  min-width: 340px;
+  max-width: 340px;
   justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .player-right .ctrl-btn {
@@ -699,6 +701,18 @@ body {
   position: relative;
   transition: all 0.2s ease;
   color: var(--text-secondary);
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  flex-shrink: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
 }
 
 .discord-invite-btn:hover {
@@ -713,6 +727,10 @@ body {
   border-radius: 8px;
   box-shadow: 0 0 14px rgba(88, 101, 242, 0.55);
   filter: drop-shadow(0 0 6px rgba(88, 101, 242, 0.6));
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
 }
 
 .discord-invite-btn:active {
@@ -1248,30 +1266,9 @@ input:checked + .slider:before {
   transform: translateX(20px);
 }
 
-/* Birlikte Dinle rozeti (host / katılımcı durumu) */
+/* Birlikte Dinle rozeti: Player bar duzenini bozmamasi icin daima gizlidir; bildirimler toast ile verilir */
 .party-badge {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 170px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(236, 72, 153, 0.35);
-  background: rgba(27, 10, 51, 0.75);
-  color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  flex-shrink: 1;
-}
-
-.party-badge:hover {
-  border-color: rgba(236, 72, 153, 0.7);
-  box-shadow: 0 0 18px rgba(168, 85, 247, 0.28);
+  display: none !important;
 }
 
 /* Arama kutusu yalnizca Arama sekmesinde gorunur (Kesfet icerik gosterir) */
