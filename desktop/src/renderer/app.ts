@@ -60,23 +60,6 @@ let prevVolume: number = 0.8;
 let currentDuration: number = 0;
 let currentTime: number = 0;
 
-// Lyrics Manager (LRCLIB Senkronize Şarkı Sözleri)
-const lyricsManager = new LyricsManager({
-  onSeek: (targetTime: number) => {
-    if (currentDuration > 0) {
-      currentTime = targetTime;
-      currentTimeLabel.textContent = formatTime(targetTime);
-      progressFill.style.width = `${(targetTime / currentDuration) * 100}%`;
-      pendingSeek = { t: targetTime, at: Date.now() };
-      window.api?.seek?.(targetTime);
-    }
-  },
-  onOpen: () => {
-    queueDrawer?.classList.remove('open');
-    btnToggleQueue?.classList.remove('active');
-  }
-});
-
 // DOM Elements
 const searchInput = document.getElementById('searchInput') as HTMLInputElement;
 const cardsGrid = document.getElementById('cardsGrid') as HTMLDivElement;
@@ -84,10 +67,15 @@ const viewTitle = document.getElementById('viewTitle') as HTMLHeadingElement;
 const contentArea = document.querySelector('.content-area') as HTMLElement;
 const navItems = document.querySelectorAll('.nav-item');
 const toastContainer = document.getElementById('toastContainer') as HTMLDivElement;
+
+// Right Drawers Elements (Queue & Lyrics)
 const queueDrawer = document.getElementById('queueDrawer') as HTMLElement;
 const queueList = document.getElementById('queueList') as HTMLElement;
 const btnToggleQueue = document.getElementById('btnToggleQueue') as HTMLButtonElement;
 const btnCloseQueue = document.getElementById('btnCloseQueue') as HTMLButtonElement;
+const lyricsDrawer = document.getElementById('lyricsDrawer') as HTMLElement;
+const btnToggleLyrics = document.getElementById('btnToggleLyrics') as HTMLButtonElement;
+const btnCloseLyrics = document.getElementById('btnCloseLyrics') as HTMLButtonElement;
 
 // Player Bar Elements
 const playerThumb = document.getElementById('playerThumb') as HTMLImageElement;
@@ -109,6 +97,40 @@ const volumeSlider = document.getElementById('volumeSlider') as HTMLInputElement
 const btnMute = document.getElementById('btnMute') as HTMLButtonElement;
 const volumeIcon = document.getElementById('volumeIcon') as HTMLElement;
 const equalizer = document.getElementById('equalizer') as HTMLElement;
+
+/**
+ * Merkezi Çekmece Disiplini (Mutual Exclusion):
+ * Sağ taraftaki çekmecelerin (Queue ve Lyrics) aynı anda açık kalmasını kesinlikle engeller.
+ * İstisnasız her iki çekmecenin açık sınıflarını ve buton ışıltılarını temizler.
+ */
+function closeAllRightDrawers(): void {
+  // 1. Sıra (Queue) çekmecesi ve aktif butonu temizle
+  queueDrawer?.classList.remove('open');
+  btnToggleQueue?.classList.remove('active');
+
+  // 2. Şarkı Sözleri (Lyrics) çekmecesi ve aktif butonu temizle
+  lyricsManager?.close();
+  lyricsDrawer?.classList.remove('open');
+  btnToggleLyrics?.classList.remove('active');
+}
+
+// Lyrics Manager (LRCLIB Senkronize Şarkı Sözleri)
+const lyricsManager = new LyricsManager({
+  onSeek: (targetTime: number) => {
+    if (currentDuration > 0) {
+      currentTime = targetTime;
+      if (currentTimeLabel) currentTimeLabel.textContent = formatTime(targetTime);
+      if (progressFill) progressFill.style.width = `${(targetTime / currentDuration) * 100}%`;
+      pendingSeek = { t: targetTime, at: Date.now() };
+      window.api?.seek?.(targetTime);
+    }
+  },
+  onOpen: () => {
+    // Çekmece açılacağı an sıranın kapalı olmasını çift dikiş garantiye al
+    queueDrawer?.classList.remove('open');
+    btnToggleQueue?.classList.remove('active');
+  }
+});
 
 // Window Controls
 const titlebar = document.getElementById('titlebar');
@@ -883,19 +905,29 @@ btnLike.addEventListener('click', async () => {
   updateLikeButton();
 });
 
-// Queue Drawer Toggle
+// Right Drawers (Queue & Lyrics) Toggles & Mutual Exclusion Discipline
 btnToggleQueue.addEventListener('click', () => {
-  lyricsManager.close();
-  const willOpen = !queueDrawer.classList.contains('open');
-  queueDrawer.classList.toggle('open', willOpen);
-  btnToggleQueue.classList.toggle('active', willOpen);
-  if (willOpen) {
+  const isCurrentlyOpen = queueDrawer.classList.contains('open');
+  closeAllRightDrawers();
+  if (!isCurrentlyOpen) {
+    queueDrawer.classList.add('open');
+    btnToggleQueue.classList.add('active');
     renderQueueList();
   }
 });
 btnCloseQueue.addEventListener('click', () => {
-  queueDrawer.classList.remove('open');
-  btnToggleQueue.classList.remove('active');
+  closeAllRightDrawers();
+});
+
+btnToggleLyrics?.addEventListener('click', () => {
+  const isCurrentlyOpen = lyricsManager.isOpen() || lyricsDrawer.classList.contains('open');
+  closeAllRightDrawers();
+  if (!isCurrentlyOpen) {
+    lyricsManager.open();
+  }
+});
+btnCloseLyrics?.addEventListener('click', () => {
+  closeAllRightDrawers();
 });
 
 function renderQueueList() {
@@ -1486,10 +1518,7 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
   const key = e.key.toLowerCase();
 
   if (code === 'Escape') {
-    if (queueDrawer.classList.contains('open')) {
-      queueDrawer.classList.remove('open');
-      btnToggleQueue.classList.remove('active');
-    }
+    closeAllRightDrawers();
   }
 
   if (code === 'Space') {

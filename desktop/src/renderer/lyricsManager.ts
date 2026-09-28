@@ -124,11 +124,7 @@ export class LyricsManager {
     this.titleEl = document.getElementById('lyricsTrackTitle');
     this.artistEl = document.getElementById('lyricsTrackArtist');
 
-    if (this.toggleBtn) {
-      this.toggleBtn.addEventListener('click', () => {
-        this.toggle();
-      });
-    }
+    // Not: toggleBtn tıklama ve karşılıklı dışlama yönetimi app.ts içindeki closeAllRightDrawers() merkezi fonksiyonuna devredilmiştir.
 
     if (this.closeBtn) {
       this.closeBtn.addEventListener('click', () => {
