@@ -237,7 +237,20 @@ export class DiscordRpcManager {
       const safeTitle = (track.title || 'Lupin Music').slice(0, 128);
       const artist = (track.artist || 'Lupin Audio').trim();
       const album = (track.album || '').trim();
-      const safeState = (album ? `by ${artist} • ${album}` : `by ${artist}`).slice(0, 128);
+
+      const fmtTime = (sec: number) => {
+        const m = Math.floor(Math.max(0, sec) / 60);
+        const s = Math.floor(Math.max(0, sec) % 60);
+        return `${m}:${s < 10 ? '0' : ''}${s}`;
+      };
+      const curFormatted = fmtTime(currentTime);
+      const durFormatted = fmtTime(track.duration || 0);
+
+      const safeState = isPlaying
+        ? (album ? `by ${artist} • ${album}` : `by ${artist}`).slice(0, 128)
+        : (durFormatted !== '0:00'
+            ? `⏸️ Duraklatıldı (${curFormatted} / ${durFormatted}) • by ${artist}`
+            : `⏸️ Duraklatıldı • by ${artist}`).slice(0, 128);
 
       const nowMs = Date.now();
       const curSec = Math.max(0, Math.floor(currentTime));
@@ -272,25 +285,59 @@ export class DiscordRpcManager {
       ];
 
       const activityPayload: any = {
+        type: 2, // 2 = Listening to -> Discord profilinde "Lupin Music Dinliyor" olarak görünür
         details: safeTitle,
         state: safeState,
-        startTimestamp,
-        endTimestamp,
-        largeImageKey: largeImage,
-        largeImageText: `${(album || track.title || 'Lupin Music').slice(0, 60)} • github.com/mrcbrbn5361/LupinMusic`.slice(0, 128),
-        smallImageKey: defaultLogo,
-        smallImageText: isPlaying ? 'Çalıyor • Lupin Music' : 'Duraklatıldı • Lupin Music',
         instance: false,
         buttons
       };
 
+      if (isPlaying && (startTimestamp || endTimestamp)) {
+        activityPayload.timestamps = {
+          start: startTimestamp,
+          end: endTimestamp
+        };
+      } else {
+        // Duraklatıldığında Discord'un canlı geri sayımı ve 0'dan sonra sonsuz yükselen saati sıfırlanır
+        activityPayload.timestamps = {};
+      }
+
+      activityPayload.assets = {
+        large_image: largeImage,
+        large_text: `${(album || track.title || 'Lupin Music').slice(0, 60)} • github.com/mrcbrbn5361/LupinMusic`.slice(0, 128),
+        small_image: defaultLogo,
+        small_text: isPlaying ? 'Çalıyor • Lupin Music' : '⏸️ Duraklatıldı • Lupin Music'
+      };
+
       const trackId = track.id;
-      this.rpc.setActivity(activityPayload).then(() => {
+      // Discord RPC kuralı: Butonlar varken asla secrets/party gönderilemez.
+      delete activityPayload.secrets;
+      delete activityPayload.party;
+      delete activityPayload.partyId;
+      delete activityPayload.joinSecret;
+
+      // discord-rpc paketinin varsayılan setActivity() sarmalayıcısı type'ı elediğinden
+      // doğrudan IPC request('SET_ACTIVITY') ile type: 2 (Listening to) gönderilir.
+      const sendPromise = (this.rpc as any).request
+        ? (this.rpc as any).request('SET_ACTIVITY', { pid: process.pid, activity: activityPayload })
+        : this.rpc.setActivity({
+            details: safeTitle,
+            state: safeState,
+            timestamps: activityPayload.timestamps,
+            largeImageKey: largeImage,
+            largeImageText: activityPayload.assets.large_text,
+            smallImageKey: defaultLogo,
+            smallImageText: activityPayload.assets.small_text,
+            instance: false,
+            buttons
+          });
+
+      sendPromise.then(() => {
         this.lastSentTrackId = trackId;
         this.lastSentStatus = status;
         this.lastSentCurrentTime = currentTime;
         this.lastSentDuration = track.duration || 0;
-        console.log(`[DiscordRPC] 🎵 Activity updated: "${safeTitle}" - ${safeState} (${status})`);
+        console.log(`[DiscordRPC] 🎵 Activity updated (Listening to): "${safeTitle}" - ${safeState} (${status})`);
       }).catch((e: any) => {
         console.warn('[DiscordRPC] setActivity failed:', e?.message || e);
       });

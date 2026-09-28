@@ -1,0 +1,20 @@
+{
+  "appId": "com.lupin.music",
+  "appName": "Lupin Music",
+  "webDir": "desktop/dist/renderer",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#090214",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#090214"
+    }
+  }
+}

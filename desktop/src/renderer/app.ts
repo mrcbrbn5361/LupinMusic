@@ -1,4 +1,22 @@
 import { renderNowPlayingCard } from './playerCard';
+import { QueueManager, trackKey, shuffled } from './queueManager';
+import {
+  noteTaste,
+  wireSongCards,
+  setupSearchInput,
+  sectionHtml,
+  renderSongCardHtml,
+  renderBrowseCardHtml,
+  type CardActionHandlers,
+  type SearchContext,
+  type BrowseCard,
+  openBrowseDetail,
+  esc
+} from './searchModal';
+import { loadExplore as loadExploreView } from './explore';
+import { playlistManager, type PlaylistContext } from './playlistManager';
+import { libraryManager, type LibraryContext } from './libraryManager';
+import { LyricsManager } from './lyricsManager';
 
 // Declare window.api type from preload
 declare global {
@@ -23,17 +41,41 @@ interface Track {
   source?: 'pick' | 'radio';
 }
 
-// State
-let currentQueue: Track[] = [];
+// Queue Manager & State
+const queueManager = new QueueManager(false);
+let currentQueue: Track[] = queueManager.getQueue();
 let currentIndex: number = -1;
 let currentTrack: Track | null = null;
+
+queueManager.onQueueChanged = () => {
+  currentQueue = queueManager.getQueue();
+  currentIndex = queueManager.getCurrentIndex();
+  renderQueueList();
+  queueChangedDebounced();
+};
 let isPlaying: boolean = false;
 let isShuffled: boolean = false;
 let repeatMode: 'off' | 'all' | 'one' = 'off';
-let likedTrackIds = new Set<string>();
 let prevVolume: number = 0.8;
 let currentDuration: number = 0;
 let currentTime: number = 0;
+
+// Lyrics Manager (LRCLIB Senkronize Şarkı Sözleri)
+const lyricsManager = new LyricsManager({
+  onSeek: (targetTime: number) => {
+    if (currentDuration > 0) {
+      currentTime = targetTime;
+      currentTimeLabel.textContent = formatTime(targetTime);
+      progressFill.style.width = `${(targetTime / currentDuration) * 100}%`;
+      pendingSeek = { t: targetTime, at: Date.now() };
+      window.api?.seek?.(targetTime);
+    }
+  },
+  onOpen: () => {
+    queueDrawer?.classList.remove('open');
+    btnToggleQueue?.classList.remove('active');
+  }
+});
 
 // DOM Elements
 const searchInput = document.getElementById('searchInput') as HTMLInputElement;
@@ -166,6 +208,7 @@ function applyCurrentTrackUI(track: Track) {
   playerArtist.textContent = track.artist || 'Lupin Audio';
   applyThumb(playerThumb, track.thumbnail || '', track.id);
   document.title = `${track.title || 'Lupin Music'} • ${track.artist || 'Lupin Audio'} — Lupin Music`;
+  lyricsManager.loadForTrack(track);
 
   if ('mediaSession' in navigator) {
     try {
@@ -186,14 +229,7 @@ function applyCurrentTrackUI(track: Track) {
 }
 
 let activePlayReqId = 0;
-let isFetchingRelated = false;
-let lastRelatedVideoId = '';
 let isTrackEnding = false;
-
-// Kararli kuyruk / karisik-sira durumu
-let shuffleOrder: number[] = []; // karisik modda kuyruk indexlerinin calinma sirasi
-let shufflePos = 0; // shuffleOrder icinde su anki konum
-let radioGen = 0; // bayat radyo fetch sonuclarini eleme sayaci
 
 // Motor gecisi sirasinda eski videodan gelen bayat raporlari eleme
 let pendingVideoId: string | null = null;
@@ -208,22 +244,6 @@ let joinSeek: { id: string; t: number; at: number; tries: number } | null = null
 // Kullanicinin bilerek duraklatip duraklatmadigi (tekrar-bir karari icin)
 let userPaused: boolean = false;
 
-/** Ayni kaydin farkli video id'leri icin normalize anahtar. */
-function trackKey(t: { title?: string; artist?: string; duration?: number }): string {
-  const norm = (v: string) => String(v || '')
-    .toLocaleLowerCase('tr')
-    .replace(/\b(official|video|audio|lyrics?|hd|hq|remaster(?:ed)?|live|explicit|full|mono|stereo)\b/gi, ' ')
-    .replace(/[()\[\]]/g, ' ')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ').trim();
-  return norm(t.title || '') + '|' + norm(t.artist || '');
-}
-
-/** HTML enjeksiyonuna karsi metin kacirma (InnerTube verisi disaridandir). */
-function esc(s: string): string {
-  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
 
 function setPendingVideo(id: string): void {
   pendingVideoId = id;
@@ -239,174 +259,56 @@ function clearPendingVideo(): void {
   }
 }
 
-function shuffled<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
 /** Karisik mod acildiginda / kuyruk yenilendiginde calinma sirasini bir kez kurar. */
 function rebuildShuffleOrder(): void {
-  if (currentIndex < 0 || currentQueue.length === 0) {
-    shuffleOrder = [];
-    shufflePos = 0;
-    return;
-  }
-  const rest = currentQueue.map((_, i) => i).filter(i => i !== currentIndex);
-  shuffleOrder = [currentIndex, ...shuffled(rest)];
-  shufflePos = 0;
+  queueManager.rebuildShuffleOrder();
 }
 
 function syncShufflePos(): void {
-  if (!isShuffled) return;
-  const pos = shuffleOrder.indexOf(currentIndex);
-  if (pos !== -1) {
-    shufflePos = pos;
-  } else {
-    shuffleOrder.splice(shufflePos + 1, 0, currentIndex);
-    shufflePos += 1;
-  }
+  queueManager.syncShufflePos();
 }
 
 /** Siradaki parcanin kuyruk indexi; sonda ise -1. Karisik modda onceden kurulu sira izlenir. */
 function orderedNextIndex(): number {
-  if (currentQueue.length === 0 || currentIndex < 0) return -1;
-  if (isShuffled) {
-    return shufflePos + 1 < shuffleOrder.length ? shuffleOrder[shufflePos + 1] : -1;
-  }
-  return currentIndex + 1 < currentQueue.length ? currentIndex + 1 : -1;
+  return queueManager.orderedNextIndex();
 }
 
 /** Onceki parcanin kuyruk indexi; basta ise -1. */
 function orderedPrevIndex(): number {
-  if (currentQueue.length === 0 || currentIndex < 0) return -1;
-  if (isShuffled) {
-    return shufflePos > 0 ? shuffleOrder[shufflePos - 1] : -1;
-  }
-  return currentIndex - 1 >= 0 ? currentIndex - 1 : -1;
-}
-
-async function fetchRelatedFresh(videoId: string): Promise<Track[]> {
-  try {
-    let related = await window.api?.getRelatedTracks?.(videoId);
-    if (!Array.isArray(related) || related.length === 0) {
-      related = await window.api?.getExplore?.();
-    }
-    if (Array.isArray(related)) {
-      const recentIds = new Set(currentQueue.slice(Math.max(0, currentIndex - 30)).map((t: Track) => t.id));
-      let filtered = related.filter((t: Track) => t && t.id && !recentIds.has(t.id));
-      if (filtered.length === 0) {
-        filtered = related.filter((t: Track) => t && t.id && t.id !== videoId);
-      }
-      return filtered;
-    }
-  } catch (err) {
-    console.warn('Fetch related tracks error:', err);
-  }
-  return [];
+  return queueManager.orderedPrevIndex();
 }
 
 /**
  * Radyo parcalarini SADECE kuyruk sonuna ekler; mevcut siralamayi asla bozmaz.
- * Eklenen indexleri doner. Kuyruk siserse calinmis basi budar.
  */
 function appendRadioTracks(tracks: Track[]): number[] {
-  const added: number[] = [];
-  const existingIds = new Set(currentQueue.map((t: Track) => t.id));
-  for (const t of tracks) {
-    if (!t || !t.id || existingIds.has(t.id)) continue;
-    existingIds.add(t.id);
-    currentQueue.push({ ...t, source: 'radio' });
-    added.push(currentQueue.length - 1);
-  }
-  if (added.length > 0 && isShuffled) {
-    for (const i of shuffled(added)) shuffleOrder.push(i);
-  }
-  trimQueueHead();
-  if (added.length > 0) {
-    console.log(`[Player] radio +${added.length} (queue=${currentQueue.length})`);
-    renderQueueList();
-  }
-  return added;
+  return queueManager.appendRadioTracks(tracks);
 }
 
 /** Kuyruk cok buyurse geride kalan calinmisleri buda (en fazla 50 kayit geriye bakilir). */
 function trimQueueHead(): void {
-  if (currentIndex > 50) {
-    const drop = currentIndex - 50;
-    currentQueue.splice(0, drop);
-    currentIndex -= drop;
-    if (isShuffled) {
-      shuffleOrder = shuffleOrder.map(x => x - drop).filter(x => x >= 0);
-      const pos = shuffleOrder.indexOf(currentIndex);
-      shufflePos = pos !== -1 ? pos : 0;
-    }
-  }
+  queueManager.trimQueueHead();
 }
 
 /** Yeni secilen parca icin radyo listesini kurar; tohum degismisse bayat sonucu atar. */
 async function attachRadio(seed: Track, gen: number): Promise<void> {
-  const fresh = await fetchRelatedFresh(seed.id);
-  if (gen !== radioGen) return;
-  if (!currentQueue.some(t => t.id === seed.id)) return;
-  if (fresh.length === 0) console.warn('[Player] radio fetch empty for', seed.id);
-  appendRadioTracks(fresh);
+  return queueManager.attachRadio(seed, gen);
 }
 
 /** Sira sonuna yaklasinca radyo sessizce uzatilir (siralama degismez, sadece eklenir). */
 async function ensureRadioAhead(): Promise<void> {
-  if (!currentTrack || isFetchingRelated) return;
-  if (currentQueue.length - currentIndex > 3) return;
-  if (lastRelatedVideoId === currentTrack.id) return;
-  isFetchingRelated = true;
-  try {
-    const seed = currentTrack;
-    const gen = radioGen;
-    const before = currentQueue.length;
-    await attachRadio(seed, gen);
-    // Basarisiz fetch tekrar denemeyi engellemesin: eklenemediyse kilidi koyma
-    if (currentQueue.length === before) return;
-    lastRelatedVideoId = seed.id;
-  } finally {
-    isFetchingRelated = false;
-  }
+  return queueManager.ensureRadioAhead(currentTrack);
 }
 
 /** Sira tukendiginde son bir uzatma denemesi; eklenirse true doner. */
 async function extendRadioNow(): Promise<boolean> {
-  if (!currentTrack) return false;
-  const gen = radioGen;
-  try {
-    let fresh = await fetchRelatedFresh(currentTrack.id);
-    if (fresh.length === 0) {
-      const explore = await window.api?.getExplore?.();
-      if (Array.isArray(explore)) {
-        fresh = explore.filter(t => t && t.id && t.id !== currentTrack?.id);
-      }
-    }
-    if (gen !== radioGen || fresh.length === 0) return false;
-    lastRelatedVideoId = currentTrack.id;
-    return appendRadioTracks(fresh).length > 0;
-  } catch {
-    return false;
-  }
+  return queueManager.extendRadioNow(currentTrack);
 }
 
 /** Motorun kendi kendine gectigi (kuyruk disi) parcayi siraya isler; kuyruk hep gercegi soyler. */
 function insertAdoptedTrack(t: Track): void {
-  const at = currentIndex + 1;
-  currentQueue.splice(at, 0, { ...t, source: 'radio' });
-  if (isShuffled) {
-    shuffleOrder = shuffleOrder.map(x => (x >= at ? x + 1 : x));
-    shuffleOrder.splice(shufflePos + 1, 0, at);
-    shufflePos += 1;
-  }
-  currentIndex = at;
-  currentTrack = currentQueue[at];
-  trimQueueHead();
+  queueManager.insertAdopted(t);
+  currentTrack = queueManager.getCurrentTrack();
 }
 
 // Playback Logic
@@ -418,9 +320,7 @@ function queueChangedDebounced(): void {
   partyQueueTimer = window.setTimeout(() => {
     partyQueueTimer = null;
     if (partyRole !== 'host') return;
-    const upcoming = currentQueue
-      .slice(currentIndex + 1, currentIndex + 8)
-      .map((t) => ({ id: t.id, title: t.title, artist: t.artist, duration: t.duration || 0 }));
+    const upcoming = queueManager.getUpcomingTracks(8);
     window.api?.sendPartyQueue?.(upcoming);
   }, 700);
 }
@@ -431,56 +331,45 @@ function queueChangedDebounced(): void {
  * - queueContext verilmemişse (Arama sonucu tekil tıklama): tohum parça + arkasından otomatik radyo kurulur.
  */
 async function playTrack(track: Track, queueContext?: Track[]) {
-  radioGen += 1;
-  const gen = radioGen;
+  const gen = queueManager.incrementRadioGen();
   isTrackEnding = false;
-  lastRelatedVideoId = '';
   // Katilimci elle parca degistiriyor: partiden ayril (host etkilenmez)
   leavePartyIfFollowing('parça değiştirdin');
-  // Kullanicinin sectigi parca mi, radyo ile eklenen mi
   // Kuyruk degistiyse host'a bildir (birlikte dinleme kuyrugu paylasilir)
   queueChangedDebounced();
   // Kullanici elle baska bir parca sectiyse bekleyen parti konumu gecersizdir
   if (!joinSeek || joinSeek.id !== track.id) joinSeek = null;
 
   if (queueContext && queueContext.length > 1) {
-    currentQueue = queueContext.map(t => ({ ...t, source: 'pick' }));
-    const idx = currentQueue.findIndex(t => t.id === track.id);
-    currentIndex = idx !== -1 ? idx : 0;
-    if (isShuffled) {
-      rebuildShuffleOrder();
-    } else {
-      shuffleOrder = [];
-      shufflePos = 0;
+    queueManager.setQueueContext(queueContext, track);
+    currentTrack = queueManager.getCurrentTrack();
+    if (currentTrack) {
+      await startTrack(currentTrack);
+      renderQueueList();
+      queueManager.ensureRadioAhead(currentTrack).catch(() => {});
     }
-    await startTrack(currentQueue[currentIndex]);
-    renderQueueList();
-    ensureRadioAhead().catch(() => {});
   } else {
-    currentQueue = [{ ...track, source: 'pick' }];
-    currentIndex = 0;
-    if (isShuffled) {
-      shuffleOrder = [0];
-      shufflePos = 0;
-    } else {
-      shuffleOrder = [];
-      shufflePos = 0;
+    queueManager.setSingleTrack(track);
+    currentTrack = queueManager.getCurrentTrack();
+    if (currentTrack) {
+      await startTrack(currentTrack);
+      renderQueueList();
+      queueManager.attachRadio(currentTrack, gen).catch(() => {});
     }
-
-    await startTrack(currentQueue[0]);
-    renderQueueList();
-    attachRadio(currentQueue[0], gen).catch(() => {});
   }
 }
 
 /** Kuyruk ici gezinme (cekmece tiklamasi, ileri/geri, otomatik gecis). Kuyrugu bozmaz. */
 async function playQueueIndex(i: number) {
-  if (i < 0 || i >= currentQueue.length) return;
+  const q = queueManager.getQueue();
+  if (i < 0 || i >= q.length) return;
   isTrackEnding = false;
-  currentIndex = i;
-  syncShufflePos();
-  await startTrack(currentQueue[i]);
-  ensureRadioAhead().catch(() => {});
+  queueManager.setCurrentIndex(i);
+  currentTrack = queueManager.getCurrentTrack();
+  if (currentTrack) {
+    await startTrack(currentTrack);
+    queueManager.ensureRadioAhead(currentTrack).catch(() => {});
+  }
 }
 
 async function startTrack(track: Track) {
@@ -513,7 +402,7 @@ async function startTrack(track: Track) {
       return;
     }
     // Gecmise yalnizca gercekten baslayan parca girer
-    window.api?.addToHistory?.(track);
+    libraryManager.addToHistory(track);
   } catch (err) {
     console.error('Play track failed:', err);
     if (reqId === activePlayReqId) {
@@ -759,7 +648,7 @@ window.api?.onPlaybackUpdate?.((playback: {
       ensureRadioAhead().catch(() => {});
     }
     applyCurrentTrackUI(currentTrack);
-    window.api?.addToHistory?.(currentTrack);
+    libraryManager.addToHistory(currentTrack);
   } else if (currentTrack && (!playback.videoId || playback.videoId === currentTrack.id)) {
     let patched = false;
     if (playback.title && currentTrack.title === 'Lupin Music' && playback.title !== 'YouTube Music') {
@@ -785,6 +674,7 @@ window.api?.onPlaybackUpdate?.((playback: {
 
   currentTimeLabel.textContent = formatTime(currentTime);
   durationLabel.textContent = formatTime(currentDuration);
+  lyricsManager.syncTime(currentTime);
 
   if (currentDuration > 0) {
     const pct = Math.min(100, Math.max(0, (currentTime / currentDuration) * 100));
@@ -837,6 +727,7 @@ setInterval(() => {
   if (currentDuration > 0) {
     progressFill.style.width = `${Math.min(100, (currentTime / currentDuration) * 100)}%`;
   }
+  lyricsManager.syncTime(currentTime);
 }, 250);
 
 // Seek bar click
@@ -940,15 +831,8 @@ btnNext.addEventListener('click', playNext);
 btnPrev.addEventListener('click', playPrev);
 
 btnShuffle.addEventListener('click', () => {
-  isShuffled = !isShuffled;
+  isShuffled = queueManager.toggleShuffle();
   btnShuffle.classList.toggle('active', isShuffled);
-  if (isShuffled && currentQueue.length > 0 && currentIndex >= 0) {
-    // Karisik sira bir kez kurulur; her adimda yeniden zar atilmaz
-    rebuildShuffleOrder();
-  } else {
-    shuffleOrder = [];
-    shufflePos = 0;
-  }
   window.api?.updateSettings?.({ shuffle: isShuffled });
   showToast(isShuffled ? '🔀 Karışık çalma açık' : '➡️ Sıralı çalma açık');
 });
@@ -984,23 +868,16 @@ btnRepeat.addEventListener('click', () => {
 });
 
 // Like Button
-async function updateLikeButton() {
-  if (!currentTrack) {
-    btnLike.classList.remove('liked');
-    return;
-  }
-  const liked = likedTrackIds.has(currentTrack.id);
-  btnLike.classList.toggle('liked', liked);
+function updateLikeButton() {
+  libraryManager.updateLikeButtonUI(btnLike, currentTrack);
 }
 
 btnLike.addEventListener('click', async () => {
   if (!currentTrack) return;
-  const isLiked = await window.api.toggleLike(currentTrack);
+  const isLiked = await libraryManager.toggleLike(currentTrack);
   if (isLiked) {
-    likedTrackIds.add(currentTrack.id);
     showToast(`💜 "${currentTrack.title}" Beğenilenlere eklendi!`);
   } else {
-    likedTrackIds.delete(currentTrack.id);
     showToast(`💔 "${currentTrack.title}" Beğenilenlerden çıkarıldı.`);
   }
   updateLikeButton();
@@ -1008,11 +885,17 @@ btnLike.addEventListener('click', async () => {
 
 // Queue Drawer Toggle
 btnToggleQueue.addEventListener('click', () => {
-  queueDrawer.classList.toggle('open');
-  renderQueueList();
+  lyricsManager.close();
+  const willOpen = !queueDrawer.classList.contains('open');
+  queueDrawer.classList.toggle('open', willOpen);
+  btnToggleQueue.classList.toggle('active', willOpen);
+  if (willOpen) {
+    renderQueueList();
+  }
 });
 btnCloseQueue.addEventListener('click', () => {
   queueDrawer.classList.remove('open');
+  btnToggleQueue.classList.remove('active');
 });
 
 function renderQueueList() {
@@ -1108,159 +991,71 @@ function renderCards(tracks: Track[], queueContext?: Track[]) {
   });
 }
 
+// Search & Explore Context
+let browseGen = 0;
+const getBrowseGen = () => browseGen;
+const incrementBrowseGen = () => ++browseGen;
+
+const cardActionHandlers: CardActionHandlers = {
+  onPlayTrack: (track, queueContext) => { playTrack(track, queueContext).catch(() => {}); },
+  onTogglePlayPause: () => { togglePlayPause(); },
+  onQueueInsertNext: (track) => { queueInsertNext(track); },
+  getCurrentTrack: () => currentTrack,
+  onRenderCards: (tracks, queueContext) => { renderCards(tracks, queueContext); },
+  onLoadExplore: () => { loadExplore(); }
+};
+
+const searchContext: SearchContext = {
+  searchInput,
+  cardsGrid,
+  viewTitle,
+  handlers: cardActionHandlers,
+  getBrowseGen,
+  incrementBrowseGen
+};
+
 // Navigation Views
 async function loadExplore() {
-  const gen = ++browseGen;
-  viewTitle.textContent = '🔥 Keşfet — Popüler Parçalar';
-  cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:20px;">Lüks seçkiler yükleniyor...</div>';
-  try {
-    const tracks = await window.api.getExplore();
-    if (gen !== browseGen) return;
-
-    // "Dinlediklerine alternatifler": gecmisin son 3 sarkisindan YT radyolari
-    const history = await window.api.getHistory().catch(() => [] as Track[]);
-    if (gen !== browseGen) return;
-    const seeds = ((history || []) as Track[]).filter((t: Track) => t && t.id).slice(0, 3);
-    let alternatives: Track[] = [];
-    if (seeds.length) {
-      const picked = new Set(tracks.map((t: Track) => t.id));
-      const batches: Track[][] = await Promise.all(seeds.map((s: Track) =>
-        window.api.getRelatedTracks(s.id).catch(() => [] as Track[])
-      ));
-      if (gen !== browseGen) return;
-      const seen = new Set<string>();
-      for (const batch of batches) {
-        for (const t of batch || []) {
-          if (!t || !t.id || picked.has(t.id) || seen.has(t.id)) continue;
-          seen.add(t.id);
-          alternatives.push(t as Track);
-          if (alternatives.length >= 12) break;
-        }
-        if (alternatives.length >= 12) break;
-      }
-    }
-
-    const sections: string[] = [];
-    if (alternatives.length) {
-      sections.push(`<div class="cards-section">
-        <h3 class="cards-section-title">🎧 Dinlediklerine alternatifler</h3>
-        <div class="cards-grid">${alternatives.map(renderSongCardHtml).join('')}</div>
-      </div>`);
-    }
-    sections.push(`<div class="cards-section">
-      <h3 class="cards-section-title">🔥 Popüler Parçalar</h3>
-      <div class="cards-grid">${tracks.map(renderSongCardHtml).join('')}</div>
-    </div>`);
-    cardsGrid.innerHTML = sections.join('');
-    wireSongCards(tracks.concat(alternatives));
-  } catch (err) {
-    if (gen !== browseGen) return;
-    cardsGrid.innerHTML = '<div style="color:var(--text-muted); padding:20px;">Keşfet yüklenemedi.</div>';
-  }
-}
-
-async function loadLiked() {
-  viewTitle.textContent = '💜 Beğenilen Şarkılar';
-  const liked = await window.api.getLikedTracks();
-  likedTrackIds = new Set(liked.map((t: Track) => t.id));
-  renderCards(liked, liked);
-}
-
-interface LocalPlaylist {
-  id: string;
-  name: string;
-  createdAt: number;
-  tracks: Track[];
-}
-
-async function loadPlaylists(openId?: string) {
-  viewTitle.textContent = '📀 Listelerim';
-  const lists: LocalPlaylist[] = (await window.api?.getPlaylists?.()) || [];
-  if (!lists.length) {
-    cardsGrid.innerHTML = `<div style="color:var(--text-secondary); padding:24px;">Henüz listen yok.<br/>Sıradaki şarkılardan <b>"💾 Kaydet"</b> ile ilk listeni oluştur.</div>`;
-    return;
-  }
-  // Belirli liste acilmak istendiyse icerigi goster
-  if (openId) {
-    const pl = lists.find((p) => p.id === openId);
-    if (pl) return openLocalPlaylist(pl);
-  }
-  const cards = lists.map((pl) => ({
-    browseId: `local:${pl.id}`,
-    title: pl.name,
-    subtitle: `${pl.tracks.length} şarkı`,
-    thumbnail: pl.tracks[0]?.thumbnail || './logo.png',
-    type: 'local' as const
-  }));
-  cardsGrid.innerHTML = sectionHtml(
-    '📀 Listelerim',
-    cards.map((c) => renderLocalPlaylistCard(c)),
-    (x) => x,
-    'local'
-  );
-  document.querySelectorAll('.local-playlist-card').forEach((el) => {
-    el.addEventListener('click', (e) => {
-      const id = (el.getAttribute('data-browse') || '').replace(/^local:/, '');
-      const isDelete = (e.target as HTMLElement).closest('.playlist-delete');
-      if (isDelete && id) {
-        e.stopPropagation();
-        deleteLocalPlaylist(id);
-        return;
-      }
-      if (id) openLocalPlaylist(id);
-    });
+  await loadExploreView({
+    cardsGrid,
+    viewTitle,
+    handlers: cardActionHandlers,
+    getBrowseGen,
+    incrementBrowseGen
   });
 }
 
-function renderLocalPlaylistCard(item: { browseId: string; title: string; subtitle: string; thumbnail: string }): string {
-  return `
-    <div class="music-card browse-card local-playlist-card" data-browse="${esc(item.browseId)}">
-      <div class="card-thumb-wrap">
-        <img src="${esc(item.thumbnail || './logo.png')}" data-thumb="${esc(item.thumbnail || '')}" class="card-thumb" alt="${esc(item.title)}" loading="lazy" onerror="lupinThumb(this)" />
-        <div class="card-play-overlay"><span class="browse-icon">📀</span></div>
-        <button class="playlist-delete" title="Listeyi sil">🗑</button>
-      </div>
-      <div class="card-title">${esc(item.title)}</div>
-      <div class="card-artist">${esc(item.subtitle)}</div>
-    </div>`;
+const libraryContext: LibraryContext = {
+  cardsGrid,
+  viewTitle,
+  renderCards: (tracks, qc) => renderCards(tracks, qc)
+};
+
+const playlistContext: PlaylistContext = {
+  cardsGrid,
+  viewTitle,
+  renderCards: (tracks, qc) => renderCards(tracks, qc),
+  showToast,
+  getBrowseGen,
+  incrementBrowseGen
+};
+
+async function loadLiked() {
+  await libraryManager.loadLiked(libraryContext);
 }
 
-function openLocalPlaylist(plOrId: LocalPlaylist | string): void {
-  const show = async () => {
-    const lists: LocalPlaylist[] = (await window.api?.getPlaylists?.()) || [];
-    const pl = typeof plOrId === 'string' ? lists.find((p) => p.id === plOrId) : plOrId;
-    if (!pl) { loadPlaylists(); return; }
-    const fresh = lists.find((p) => p.id === pl.id) || pl;
-    viewTitle.textContent = `📀 ${fresh.name}`;
-    if (!fresh.tracks.length) {
-      cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:24px;">Bu liste boş.</div>';
-      return;
-    }
-    renderCards(fresh.tracks, fresh.tracks);
-    const wrap = document.createElement('div');
-    wrap.className = 'browse-back-wrap';
-    wrap.innerHTML = '<button id="btnBrowseBack" class="ctrl-btn">← Listelerim</button>';
-    cardsGrid.appendChild(wrap);
-    document.getElementById('btnBrowseBack')?.addEventListener('click', () => {
-      browseGen += 1;
-      loadPlaylists();
-    });
-  };
-  show();
-}
-
-async function deleteLocalPlaylist(id: string): Promise<void> {
-  const ok = await window.api?.deletePlaylist?.(id);
-  if (ok) {
-    showToast('🗑 Liste silindi');
-    loadPlaylists();
-  }
+async function loadPlaylists(openId?: string) {
+  await playlistManager.loadPlaylists(playlistContext, openId);
 }
 
 async function loadHistory() {
-  viewTitle.textContent = '🕒 Son Çalınanlar';
-  const history = await window.api.getHistory();
-  renderCards(history, history);
+  await libraryManager.loadHistory(libraryContext);
+}
+
+async function loadArtists() {
+  await libraryManager.loadFollowedArtists(libraryContext, (browseId) => {
+    openBrowseDetail(browseId, 'artist', searchContext);
+  });
 }
 
 navItems.forEach(item => {
@@ -1279,270 +1074,14 @@ navItems.forEach(item => {
     if (view === 'explore') loadExplore();
     else if (view === 'liked') loadLiked();
     else if (view === 'playlists') loadPlaylists();
+    else if (view === 'artists') loadArtists();
     else if (view === 'history') loadHistory();
     else if (view === 'search') searchInput.focus();
   });
 });
 
-// Search input debounce (bayat sonuc yariş korumali)
-let searchDebounce: any = null;
-let browseGen = 0;
-searchInput.addEventListener('input', () => {
-  clearTimeout(searchDebounce);
-  const q = searchInput.value.trim();
-  if (!q) {
-    loadExplore();
-    return;
-  }
-
-  searchDebounce = setTimeout(async () => {
-    const gen = ++browseGen;
-    viewTitle.textContent = `🔍 "${q}" için Arama Sonuçları`;
-    cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:20px;">Aranıyor...</div>';
-    try {
-      const res = await window.api.search({ query: q, videos: showVideoVersions });
-      if (gen !== browseGen) return;
-      renderSearchResults(res, q);
-    } catch (err: any) {
-      if (gen !== browseGen) return;
-      cardsGrid.innerHTML = `<div style="color:var(--text-secondary); padding:24px;">⚠️ Arama başarısız oldu (${esc(err?.message || 'bağlantı hatası')}). İnterneti kontrol edip tekrar dene.</div>`;
-    }
-  }, 350);
-});
-
-// Video versiyonlari KISA SURELI opt-in (arama sonunda gorunur, 45 sn sonra kapanir)
-let showVideoVersions = false;
-let videoFlagTimer: any = null;
-
-function renderSearchResults(res: any, query: string): void {
-  const songs: Track[] = res?.songs || [];
-  const videos: Track[] = res?.videos || [];
-  const albums: BrowseCard[] = res?.albums || [];
-  const artists: BrowseCard[] = res?.artists || [];
-  const playlists: BrowseCard[] = res?.playlists || [];
-  if (!songs.length && !videos.length && !albums.length && !artists.length && !playlists.length) {
-    cardsGrid.innerHTML = `<div style="color:var(--text-secondary); padding:24px;">"${esc(query)}" için sonuç bulunamadı.</div>`;
-    return;
-  }
-
-  const ranked = rankByTaste(songs);
-  const sections: string[] = [];
-  if (ranked.length) {
-    sections.push(sectionHtml('🎵 Şarkılar', ranked, renderSongCardHtml, 'song'));
-  }
-  if (artists.length) {
-    sections.push(sectionHtml('👤 Sanatçılar', artists, renderBrowseCardHtml, 'artist'));
-  }
-  if (albums.length) {
-    sections.push(sectionHtml('💿 Albümler', albums, renderBrowseCardHtml, 'album'));
-  }
-  if (playlists.length) {
-    sections.push(sectionHtml('📀 Oynatma Listeleri', playlists, renderBrowseCardHtml, 'playlist'));
-  }
-  if (videos.length) {
-    sections.push(sectionHtml('🎬 Video Versiyonları', videos, renderSongCardHtml, 'video'));
-  }
-  sections.push(`<div class="search-footer-row">
-    <button class="ctrl-btn video-toggle-btn" id="btnToggleVideoVersions">${showVideoVersions ? '🎬 Videoları gizle' : '🎬 Video versiyonlarını göster'}</button>
-    <span class="search-hint">Video versiyonları arama sonuçlarını seyrek gösterir; varsayılan yalnızca müziktir.</span>
-  </div>`);
-  cardsGrid.innerHTML = sections.join('');
-  wireSongCards(ranked.concat(videos));
-  wireBrowseCards();
-
-  const vt = document.getElementById('btnToggleVideoVersions');
-  if (vt) {
-    vt.addEventListener('click', () => {
-      showVideoVersions = !showVideoVersions;
-      if (videoFlagTimer) clearTimeout(videoFlagTimer);
-      // 45 sn sonra otomatik kapanir (kisa sureli opt-in)
-      videoFlagTimer = window.setTimeout(() => {
-        showVideoVersions = false;
-        videoFlagTimer = null;
-        const q = searchInput.value.trim();
-        if (q) searchInput.dispatchEvent(new Event('input'));
-      }, 45000);
-      const q = searchInput.value.trim();
-      if (q) searchInput.dispatchEvent(new Event('input'));
-    });
-  }
-}
-
-/**
- * Zevke gore siralama: kullanici "ilk acilan sarki"ya gore filtrelenmis bir
- * liste istiyor. Puan sirasi:
- *   2 = sanatci, halihazirda dinlenen/oynanmis sanatcilardan
- *   1 = baslik ya da albüm, halihazirda dinlenen parcalarla ortak
- *   0 = diger
- * Ayrica ayni kaydin tekrarlari ve halihazirda calinan parca elenir.
- */
-const recentArtistTokens = new Set<string>();
-const recentTrackKeys = new Set<string>();
-
-function noteTaste(track: Track | null | undefined): void {
-  if (!track) return;
-  for (const token of String(track.artist || '').toLocaleLowerCase('tr').split(/[\s,;&/]+/)) {
-    if (token.length >= 3) recentArtistTokens.add(token);
-  }
-  recentTrackKeys.add(trackKey(track));
-  if (recentArtistTokens.size > 80) {
-    const first = recentArtistTokens.values().next().value;
-    if (first) recentArtistTokens.delete(first);
-  }
-  if (recentTrackKeys.size > 120) {
-    const first = recentTrackKeys.values().next().value;
-    if (first) recentTrackKeys.delete(first);
-  }
-}
-
-function rankByTaste(songs: Track[]): Track[] {
-  const seen = new Set<string>();
-  const out: Track[] = [];
-  for (const t of songs) {
-    const key = trackKey(t);
-    if (key && seen.has(key)) continue;
-    if (key) seen.add(key);
-    out.push(t);
-  }
-  const score = (t: Track): number => {
-    const artistTokens = String(t.artist || '').toLocaleLowerCase('tr').split(/[\s,;&/]+/);
-    if (artistTokens.some((a) => a.length >= 3 && recentArtistTokens.has(a))) return 2;
-    const titleTokens = String(t.title || '').toLocaleLowerCase('tr').split(/[\s,;&/'-]+/);
-    if (recentTrackKeys.has(trackKey(t))) return 1;
-    for (const key of recentTrackKeys) {
-      for (const tok of key.split(' ')) {
-        if (tok.length >= 5 && titleTokens.includes(tok)) return 1;
-      }
-    }
-    return 0;
-  };
-  return out
-    .map((t, i) => ({ t, s: score(t), i }))
-    .sort((a, b) => (b.s - a.s) || (a.i - b.i))
-    .map((x) => x.t);
-}
-
-/** Bolumlenmis HTML'deki sarki kartlarina tiklanma davranisini baglar. */
-function wireSongCards(list: Track[]): void {
-  const byId = new Map(list.map((t) => [t.id, t]));
-  document.querySelectorAll('.music-card[data-id]').forEach((el) => {
-    const id = el.getAttribute('data-id');
-    if (!id || !byId.has(id)) return;
-    el.addEventListener('click', (e) => {
-      // "+" dugmesi kart tiklamasini yutmasin: siraya ekler
-      const qbtn = (e.target as HTMLElement).closest('.card-queue-btn');
-      const track = byId.get(id);
-      if (qbtn) {
-        e.stopPropagation();
-        if (track) queueInsertNext(track);
-        return;
-      }
-      if (!track) return;
-      if (currentTrack && currentTrack.id === track.id) togglePlayPause();
-      else playTrack(track, list).catch(() => {});
-    });
-  });
-}
-
-interface BrowseCard {
-  browseId: string;
-  title: string;
-  subtitle: string;
-  thumbnail: string;
-  type: 'artist' | 'album' | 'playlist';
-  songCount?: number;
-}
-
-function sectionHtml(title: string, items: any[], itemHtml: (t: any) => string, kind: string): string {
-  return `<div class="cards-section">
-    <h3 class="cards-section-title">${esc(title)}</h3>
-    <div class="cards-grid">${items.map(itemHtml).join('')}</div>
-  </div>`;
-}
-
-function renderSongCardHtml(track: Track): string {
-  const badge = track.isVideo ? '<div class="card-type-badge">VIDEO</div>' : '';
-  const durBadge = track.duration && track.duration > 0
-    ? `<div class="card-duration">${formatTime(track.duration)}</div>` : '';
-  return `
-    <div class="music-card" data-id="${esc(track.id)}" data-title="${esc(track.title)}" data-artist="${esc(track.artist)}" data-album="${esc(track.album || '')}" data-duration="${track.duration || 0}">
-      <div class="card-thumb-wrap">
-        <img src="${esc(track.thumbnail || './logo.png')}" data-thumb="${esc(track.thumbnail || '')}" data-vid="${esc(track.id)}" class="card-thumb" alt="${esc(track.title)}" loading="lazy" onerror="lupinThumb(this)" />
-        ${badge}
-        ${durBadge}
-        <button class="card-queue-btn" data-qid="${esc(track.id)}" title="Sıraya ekle">＋</button>
-        <div class="card-play-overlay">
-          <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-        </div>
-      </div>
-      <div class="card-title">${esc(track.title)}</div>
-      <div class="card-artist">${esc(track.artist)}</div>
-    </div>`;
-}
-
-function renderBrowseCardHtml(item: BrowseCard): string {
-  const icon = item.type === 'artist' ? '👤' : item.type === 'album' ? '💿' : '📀';
-  return `
-    <div class="music-card browse-card" data-browse="${esc(item.browseId)}" data-btype="${esc(item.type)}">
-      <div class="card-thumb-wrap">
-        <img src="${esc(item.thumbnail || './logo.png')}" data-thumb="${esc(item.thumbnail || '')}" class="card-thumb" alt="${esc(item.title)}" loading="lazy" onerror="lupinThumb(this)" />
-        <div class="card-play-overlay"><span class="browse-icon">${icon}</span></div>
-      </div>
-      <div class="card-title">${esc(item.title)}</div>
-      <div class="card-artist">${esc(item.subtitle || (item.type === 'artist' ? 'Sanatçı' : item.type === 'album' ? 'Albüm' : 'Oynatma listesi'))}</div>
-    </div>`;
-}
-
-/** Sanatci / album / liste kartina tiklaninca detay sayfasi acilir. */
-function wireBrowseCards(): void {
-  document.querySelectorAll('.browse-card').forEach((el) => {
-    el.addEventListener('click', () => {
-      const browseId = el.getAttribute('data-browse');
-      const btype = el.getAttribute('data-btype');
-      if (!browseId) return;
-      openBrowseDetail(browseId, btype || 'playlist');
-    });
-  });
-}
-
-async function openBrowseDetail(browseId: string, btype: string): Promise<void> {
-  const gen = ++browseGen;
-  viewTitle.textContent = 'Yükleniyor...';
-  cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:20px;">İçerik yükleniyor...</div>';
-  const detail = await window.api?.browse?.(browseId);
-  if (gen !== browseGen) return;
-  if (!detail || !detail.title) {
-    viewTitle.textContent = 'İçerik bulunamadı';
-    cardsGrid.innerHTML = '<div style="color:var(--text-secondary); padding:24px;">Bu içerik yüklenemedi.</div>';
-    return;
-  }
-  const label = btype === 'artist' ? 'Sanatçı' : btype === 'album' ? 'Albüm' : 'Oynatma listesi';
-  viewTitle.textContent = `${label}: ${detail.title}`;
-  const songs: Track[] = detail.songs || [];
-  if (!songs.length) {
-    cardsGrid.innerHTML = `<div style="color:var(--text-secondary); padding:24px;">${esc(detail.subtitle || 'Bu içerikte şarkı bulunamadı.')}</div>`;
-    return;
-  }
-  renderCards(songs, songs);
-  const wrap = document.createElement('div');
-  wrap.className = 'browse-back-wrap';
-  wrap.innerHTML = '<button id="btnBrowseBack" class="ctrl-btn">← Sonuçlara dön</button>';
-  cardsGrid.appendChild(wrap);
-  const back = document.getElementById('btnBrowseBack');
-  if (back) {
-    back.addEventListener('click', () => {
-      const q = searchInput.value.trim();
-      browseGen += 1;
-      if (q) {
-        viewTitle.textContent = `🔍 "${q}" için Arama Sonuçları`;
-        const btn = document.getElementById('searchInput');
-        if (btn) btn.dispatchEvent(new Event('input'));
-      } else {
-        loadExplore();
-      }
-    });
-  }
-}
+// Search & Browse Integration
+setupSearchInput(searchContext);
 
 // Settings Modal
 function closeSettings(): void {
@@ -1644,8 +1183,13 @@ let partyBadge: HTMLElement | null = null;
 
 function updatePartyBadge(): void {
   if (!partyBadge) return;
-  if (partyRole === 'off') { partyBadge.style.display = 'none'; return; }
+  if (partyRole === 'off') {
+    partyBadge.style.display = 'none';
+    btnDiscordInvite?.classList.remove('active');
+    return;
+  }
   partyBadge.style.display = 'flex';
+  btnDiscordInvite?.classList.add('active');
   const who = partyRole === 'host'
     ? (partyListeners > 0 ? `🛡️ Sen hosting • ${partyListeners} kişi dinliyor` : '🛡️ Birlikte dinleme başladı')
     : `🎧 ${partyHostName || 'Sunucu'} dinletiyor${partyListeners ? ` • ${partyListeners} kişi` : ''}`;
@@ -1761,23 +1305,7 @@ if (btnSleep) {
 }
 
 // ---- Siradaki kuyrugu yerel liste olarak kaydet ----
-if (btnSaveQueue) {
-  btnSaveQueue.addEventListener('click', async () => {
-    if (!currentQueue.length) { showToast('⚠️ Sıra boş, kaydedilecek şarkı yok'); return; }
-    const name = (queueSaveName?.value || '').trim().slice(0, 60)
-      || `Listem • ${new Date().toLocaleDateString('tr-TR')}`;
-    const tracks = currentQueue
-      .filter((t) => t && t.id)
-      .map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album || '', thumbnail: t.thumbnail || '', duration: t.duration || 0 }));
-    const pl = await window.api?.createPlaylist?.({ name, tracks });
-    if (pl) {
-      if (queueSaveName) queueSaveName.value = '';
-      showToast(`💾 "${pl.name}" kaydedildi (${tracks.length} şarkı)`);
-    } else {
-      showToast('⚠️ Liste kaydedilemedi');
-    }
-  });
-}
+playlistManager.setupSaveQueueButton(btnSaveQueue, queueSaveName, () => queueManager.getQueue(), showToast);
 
 /**
  * Parçayı sıranın hemen sonrasına ekle (Spotify "sıraya ekle").
@@ -1786,25 +1314,7 @@ if (btnSaveQueue) {
 function queueInsertNext(track: Track): void {
   if (!track || !track.id) return;
   leavePartyIfFollowing('sıraya ekledin');
-  queueChangedDebounced();
-  const key = trackKey(track);
-  const dup = currentQueue.findIndex((t, i) => i !== currentIndex && trackKey(t) === key);
-  if (dup >= 0) {
-    currentQueue.splice(dup, 1);
-    if (dup <= currentIndex) currentIndex -= 1;
-  }
-  const at = Math.max(0, currentIndex + 1);
-  currentQueue.splice(at, 0, { ...track, source: 'pick' });
-  if (isShuffled) {
-    for (let i = 0; i < shuffleOrder.length; i++) {
-      if (shuffleOrder[i] >= at) shuffleOrder[i] += 1;
-    }
-    const pos = shuffleOrder.indexOf(currentIndex);
-    shuffleOrder.splice(pos === -1 ? shuffleOrder.length : pos + 1, 0, at);
-    shufflePos = shuffleOrder.indexOf(currentIndex);
-  }
-  trimQueueHead();
-  renderQueueList();
+  queueManager.insertNext(track);
   showToast(`➕ Sıraya eklendi: ${track.title}`);
 }
 
@@ -1942,6 +1452,8 @@ window.api?.onRemoteControl?.((action: string, payload?: any) => {
         }
       }
     }
+  } else if (action === 'toast' && payload && payload.message) {
+    showToast(payload.message);
   }
 });
 
@@ -1972,6 +1484,13 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
 
   const code = e.code;
   const key = e.key.toLowerCase();
+
+  if (code === 'Escape') {
+    if (queueDrawer.classList.contains('open')) {
+      queueDrawer.classList.remove('open');
+      btnToggleQueue.classList.remove('active');
+    }
+  }
 
   if (code === 'Space') {
     e.preventDefault();
@@ -2045,6 +1564,7 @@ async function initApp() {
     } else {
       isShuffled = true;
     }
+    queueManager.setShuffled(isShuffled);
     btnShuffle.classList.toggle('active', isShuffled);
     applyRepeatUI();
     if (typeof settings.discordRpcEnabled === 'boolean') {
@@ -2065,10 +1585,8 @@ async function initApp() {
     }
   }
 
-  const liked = await window.api?.getLikedTracks();
-  if (Array.isArray(liked)) {
-    likedTrackIds = new Set(liked.map((t: Track) => t.id));
-  }
+  await libraryManager.initLikedTracks();
+  await libraryManager.initFollowedArtists();
 
   loadExplore();
 }

@@ -1,10 +1,12 @@
 import * as http from 'http';
+import type { Socket } from 'net';
 import type { BotServerState, Track, PlaybackStatus } from '../../types/index.js';
 
 export class BotServer {
   private server: http.Server | null = null;
   private port: number = 9863;
   private isRunning: boolean = false;
+  private sockets: Set<Socket> = new Set();
   private state: BotServerState = {
     app: 'Lupin Music',
     version: '1.0.0',
@@ -177,15 +179,25 @@ export class BotServer {
         res.end(JSON.stringify({ error: 'Endpoint not found' }));
       });
 
+      this.server.on('connection', (socket: Socket) => {
+        this.sockets.add(socket);
+        socket.once('close', () => {
+          this.sockets.delete(socket);
+        });
+      });
+
       this.server.on('error', (err: any) => {
-        if (err.code === 'EADDRINUSE' && !this.retriedPort) {
-          this.retriedPort = true;
-          console.warn(`[BotServer] Port ${this.port} in use, retrying once in 3s...`);
-          setTimeout(() => {
-            if (!this.isRunning) this.start();
-          }, 3000);
-        } else if (err.code === 'EADDRINUSE') {
-          console.warn(`[BotServer] Port ${this.port} still in use, giving up (single retry done).`);
+        if (err.code === 'EADDRINUSE') {
+          if (!this.retriedPort) {
+            this.retriedPort = true;
+            console.warn(`[BotServer] Port ${this.port} in use (EADDRINUSE), force-stopping lingering instance and retrying in 2s...`);
+            this.stop();
+            setTimeout(() => {
+              if (!this.isRunning) this.start();
+            }, 2000);
+          } else {
+            console.warn(`[BotServer] Port ${this.port} still in use (EADDRINUSE). Bot server will remain dormant without crashing the app.`);
+          }
         } else {
           console.error('[BotServer] Server error:', err);
         }
@@ -194,6 +206,7 @@ export class BotServer {
 
       this.server.listen(this.port, '127.0.0.1', () => {
         this.isRunning = true;
+        this.retriedPort = false;
         console.log(`[BotServer] ✅ Lupin Bot Server listening on http://127.0.0.1:${this.port}`);
         resolve(true);
       });
@@ -201,11 +214,27 @@ export class BotServer {
   }
 
   public stop(): void {
+    this.isRunning = false;
     if (this.server) {
-      this.server.close();
+      try {
+        if (typeof (this.server as any).closeAllConnections === 'function') {
+          (this.server as any).closeAllConnections();
+        }
+      } catch {}
+      for (const socket of this.sockets) {
+        try {
+          socket.destroy();
+        } catch {}
+      }
+      this.sockets.clear();
+      try {
+        this.server.close();
+        if (typeof this.server.unref === 'function') {
+          this.server.unref();
+        }
+      } catch {}
       this.server = null;
-      this.isRunning = false;
-      console.log('[BotServer] Stopped');
+      console.log('[BotServer] Force-closed and stopped');
     }
   }
 }

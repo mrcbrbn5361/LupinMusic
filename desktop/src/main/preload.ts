@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { Track, AppSettings } from '../types/index.js';
+import type { Track, AppSettings, FollowedArtist } from '../types/index.js';
 
 const api = {
   isMac: process.platform === 'darwin',
@@ -55,6 +55,11 @@ const api = {
   playlistAdd: (id: string, track: Track): Promise<boolean> => ipcRenderer.invoke('store:playlistAdd', { id, track }),
   playlistRemove: (id: string, trackId: string): Promise<boolean> =>
     ipcRenderer.invoke('store:playlistRemove', { id, trackId }),
+  getFollowedArtists: (): Promise<FollowedArtist[]> => ipcRenderer.invoke('store:getFollowedArtists'),
+  followArtist: (artist: FollowedArtist): Promise<boolean> => ipcRenderer.invoke('store:followArtist', artist),
+  unfollowArtist: (artistId: string): Promise<boolean> => ipcRenderer.invoke('store:unfollowArtist', artistId),
+  isArtistFollowed: (artistId: string): Promise<boolean> => ipcRenderer.invoke('store:isArtistFollowed', artistId),
+  toggleFollowArtist: (artist: FollowedArtist): Promise<boolean> => ipcRenderer.invoke('store:toggleFollowArtist', artist),
 
   // Remote Control Events
   onRemoteControl: (callback: (action: string, payload?: any) => void) => {

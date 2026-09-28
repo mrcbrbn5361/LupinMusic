@@ -21,9 +21,21 @@ applyTo: "desktop/src/**/*.ts,scripts/discord-bot/**/*.js"
     (`audio-engine.ts:464`, `innertube.ts:284`).
   - `POST /api/v1/playback` govdesi `JSON.parse` + `parsed.action` kontrolunden gecer;
     bozuk govdede `400` doner (`bot-server.ts:137-154`).
-- Electron sertlestirme: ana pencere ve ses motoru `nodeIntegration: false`,
-  ses motoru ek `sandbox: true`; dis navigasyon `setWindowOpenHandler({ action: 'deny' })`
-  ile kapatilir. `executeJavaScript` icine kullanici girdisi string-birlestirme ile
-  gomulmez — sayisal girdiler `Number()` ile, ID'ler `encodeURIComponent` ile gecer.
+- Electron sertlestirme (MUST — 2026-09-28 koruma turu):
+  - Ana pencere VE ses motoru `nodeIntegration: false` + `sandbox: true` +
+    `contextIsolation: true` + `webSecurity: true`.
+  - `setWindowOpenHandler({ action: 'deny' })` + `will-navigate` kilidi: uygulama
+    penceresi baska sayfaya gitmez; http(s) tarayicida acilir, diger semalar red.
+    Motor penceresi yalniz `music.youtube.com` / `youtube.com`'a gider.
+  - Izinler varsayilan-red (`setPermissionRequestHandler → false`) — mikrofon/
+    kamera/konum/bildirim istenmez.
+  - `executeJavaScript` icine kullanici girdisi string-birlestirme ile
+    gomulmez — sayisal girdiler `Number()` ile, ID'ler `encodeURIComponent` ile gecer.
 - `BotServer` dis dunyaya acilmaz: `127.0.0.1` disinda bind yasaktir; CORS `*`
   olmasi bu sunucuya hassas veri koyma izni vermez.
+- Relay (`website/api/`): kart icin CANLI oda + eslesen parca zorunlu (`card.js`);
+  yazma hiz sinirlari (`room.js` IP/60sn, `card.js` IP+oda/10dk + engelleme listesi
+  + spamci sessize alma); govde ve PNG boyutu sinirli. Sırlar yalniz `process.env`'dedir.
+- Website: CSP + `X-Frame-Options: DENY` + nosniff + izin politikasi
+  (`vercel.json`); `/api/room|card` icin `Cache-Control: no-store`.
+- Bot: cooldown + `SendMessages` izin kontrolu + opsiyonel guild filtresi.

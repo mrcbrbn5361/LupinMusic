@@ -57,6 +57,10 @@
             <svg viewBox="0 0 24 24"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg>
             <span>Listelerim</span>
           </div>
+          <div class="nav-item" data-view="artists">
+            <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+            <span>Sanatçılar</span>
+          </div>
           <div class="nav-item" data-view="history">
             <svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
             <span>Geçmiş</span>
@@ -109,6 +113,22 @@
         </div>
         <div class="queue-list" id="queueList">
           <!-- Queue items rendered via JS -->
+        </div>
+      </aside>
+
+      <!-- Lyrics Drawer (Slide-out) -->
+      <aside class="lyrics-drawer" id="lyricsDrawer">
+        <div class="lyrics-header">
+          <div class="lyrics-header-info">
+            <h3 class="lyrics-title">🎤 Şarkı Sözleri</h3>
+            <div class="lyrics-subtitle">
+              <span id="lyricsTrackTitle">Lupin Music</span> • <span id="lyricsTrackArtist">Sözler</span>
+            </div>
+          </div>
+          <button class="win-btn close" id="btnCloseLyrics">&times;</button>
+        </div>
+        <div class="lyrics-body" id="lyricsContent">
+          <!-- Lyrics lines or empty state rendered via JS -->
         </div>
       </aside>
     </div>
@@ -182,6 +202,13 @@
 
         <!-- Birlikte Dinle durumu (host / katılımcı) — tıklayınca odadan ayrıl -->
         <div id="partyBadge" class="party-badge" style="display:none" title="Birlikte dinleme durumu"></div>
+
+        <!-- Lyrics Drawer Toggle Button -->
+        <button class="ctrl-btn" id="btnToggleLyrics" title="Şarkı Sözleri (Lyrics)">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+          </svg>
+        </button>
 
         <!-- Queue Drawer Toggle Button -->
         <button class="ctrl-btn" id="btnToggleQueue" title="Çalma Sırası">

@@ -22,6 +22,7 @@ scripts/
 .clinerules
 .traerules
 .windsurfrules
+.roomodes
 AGENT.md
 CONVENTIONS.md
 CLAUDE.md

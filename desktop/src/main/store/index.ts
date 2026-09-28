@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
-import type { Track, AppSettings } from '../../types/index.js';
+import type { Track, AppSettings, FollowedArtist } from '../../types/index.js';
 
 export interface UserPlaylist {
   id: string;
@@ -16,6 +16,7 @@ export interface LocalStoreData {
   history: Track[];
   queue: Track[];
   playlists: UserPlaylist[];
+  followedArtists: FollowedArtist[];
 }
 
 const defaultData: LocalStoreData = {
@@ -32,7 +33,8 @@ const defaultData: LocalStoreData = {
   likedTracks: [],
   history: [],
   queue: [],
-  playlists: []
+  playlists: [],
+  followedArtists: []
 };
 
 export class AppStore {
@@ -175,5 +177,56 @@ export class AppStore {
     pl.tracks = pl.tracks.filter((t) => t.id !== trackId);
     if (pl.tracks.length !== before) this.save();
     return pl.tracks.length !== before;
+  }
+
+  // ---- Takip Edilen Sanatcilar ----
+  public getFollowedArtists(): FollowedArtist[] {
+    if (!Array.isArray(this.data.followedArtists)) this.data.followedArtists = [];
+    return this.data.followedArtists;
+  }
+
+  public followArtist(artist: FollowedArtist): boolean {
+    if (!artist || !artist.id) return false;
+    this.getFollowedArtists();
+    const existingIdx = this.data.followedArtists.findIndex(a => a.id === artist.id);
+    if (existingIdx >= 0) {
+      this.data.followedArtists[existingIdx] = {
+        ...this.data.followedArtists[existingIdx],
+        ...artist
+      };
+      this.save();
+      return true;
+    }
+    this.data.followedArtists.unshift({
+      ...artist,
+      followedAt: artist.followedAt || Date.now()
+    });
+    this.save();
+    return true;
+  }
+
+  public unfollowArtist(artistId: string): boolean {
+    this.getFollowedArtists();
+    const before = this.data.followedArtists.length;
+    this.data.followedArtists = this.data.followedArtists.filter(a => a.id !== artistId);
+    if (this.data.followedArtists.length !== before) {
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  public isArtistFollowed(artistId: string): boolean {
+    return this.getFollowedArtists().some(a => a.id === artistId);
+  }
+
+  public toggleFollowArtist(artist: FollowedArtist): boolean {
+    if (this.isArtistFollowed(artist.id)) {
+      this.unfollowArtist(artist.id);
+      return false;
+    } else {
+      this.followArtist(artist);
+      return true;
+    }
   }
 }

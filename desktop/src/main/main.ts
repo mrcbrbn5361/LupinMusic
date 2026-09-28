@@ -6,7 +6,7 @@ import { InnerTubeService } from './api/innertube.js';
 import { AudioEngine } from './api/audio-engine.js';
 import { AppStore } from './store/index.js';
 import { PartyService } from './api/party.js';
-import type { Track, PlaybackStatus, AppSettings } from '../types/index.js';
+import type { Track, PlaybackStatus, AppSettings, FollowedArtist } from '../types/index.js';
 
 // Marka adi Electron varsayilani (package.json name) yerine urun adi olur;
 // app.getPath('userData') yolunu da belirler (%APPDATA%\Lupin Music).
@@ -112,14 +112,21 @@ function handleDeepLink(rawUrl: string): void {
     const parsed = new URL(clean);
     const videoId = parsed.searchParams.get('id') || parsed.searchParams.get('v') || parsed.pathname.replace(/^\//, '');
     const seekTime = Number(parsed.searchParams.get('t')) || 0;
-    const room = (parsed.searchParams.get('room') || '').toLowerCase();
-    if (!videoId) return;
+    const room = (parsed.searchParams.get('room') || parsed.searchParams.get('partyId') || parsed.searchParams.get('joinSecret') || '').toLowerCase();
+    if (!videoId && !room) return;
     // Parti odasi: host'a katil (senkron room.state -> renderer hizalama)
     if (room && /^[a-z0-9]{6,20}$/.test(room)) {
-      party.setName(store.getSettings().discordDisplayName || 'Misafir');
-      party.join(room).then((ok) => {
-        console.log(`[Party] deep link join room=${room} ok=${ok}`);
-      }).catch(() => {});
+      if (party.getRole() === 'host' && party.getRoom() === room) {
+        console.log(`[Party] Kendi odasına katılma engellendi: room=${room}`);
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
+          mainWindow.webContents.send('bot:remote-control', 'toast', { message: 'Zaten kendi odandasın' });
+        }
+      } else {
+        party.setName(store.getSettings().discordDisplayName || 'Misafir');
+        party.join(room).then((ok) => {
+          console.log(`[Party] deep link join room=${room} ok=${ok}`);
+        }).catch(() => {});
+      }
     }
     const send = (meta?: { title?: string; artist?: string; duration?: number }) => {
       if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
@@ -490,6 +497,18 @@ app.on('before-quit', () => {
   quitApplication();
 });
 
+app.on('will-quit', () => {
+  quitApplication();
+});
+
+process.on('SIGINT', () => {
+  quitApplication();
+});
+
+process.on('SIGTERM', () => {
+  quitApplication();
+});
+
 // Window control IPC
 ipcMain.on('window:minimize', () => mainWindow?.minimize());
 ipcMain.on('window:maximize', () => {
@@ -526,9 +545,16 @@ ipcMain.handle('party:host', async (_event, payload: { room?: string; name?: str
   };
 });
 
-ipcMain.handle('party:join', async (_event, payload: { room: string; name?: string }) => {
+ipcMain.handle('party:join', async (_event, payload: { room?: string; partyId?: string; joinSecret?: string; name?: string }) => {
+  const targetRoom = String(payload?.room || payload?.partyId || payload?.joinSecret || '').trim().toLowerCase();
+  if (party.getRole() === 'host' && party.getRoom() === targetRoom) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bot:remote-control', 'toast', { message: 'Zaten kendi odandasın' });
+    }
+    return { success: false, isOwnRoom: true, error: 'Zaten kendi odandasın', role: party.getRole(), room: party.getRoom() };
+  }
   if (payload?.name) party.setName(payload.name);
-  const ok = await party.join(payload?.room || '');
+  const ok = await party.join(targetRoom);
   return { success: ok, role: party.getRole(), room: party.getRoom() };
 });
 
@@ -584,13 +610,15 @@ ipcMain.handle('player:play', async (_event, track: Track) => {
 });
 
 ipcMain.handle('player:pause', async () => {
-  if (currentTrack) discordRpc.update(currentTrack, 'paused');
+  const pos = partyLocal.position || 0;
+  if (currentTrack) discordRpc.update(currentTrack, 'paused', pos);
   await audioEngine.pause();
   return true;
 });
 
 ipcMain.handle('player:resume', async () => {
-  if (currentTrack) discordRpc.update(currentTrack, 'playing');
+  const pos = partyLocal.position || 0;
+  if (currentTrack) discordRpc.update(currentTrack, 'playing', pos);
   await audioEngine.resume();
   return true;
 });
@@ -637,6 +665,11 @@ ipcMain.handle('store:playlistAdd', (_event, payload: { id: string; track: Track
 ipcMain.handle('store:playlistRemove', (_event, payload: { id: string; trackId: string }) =>
   store.playlistRemoveTrack(payload?.id || '', payload?.trackId || ''));
 ipcMain.handle('store:addToHistory', (_event, track: Track) => store.addToHistory(track));
+ipcMain.handle('store:getFollowedArtists', () => store.getFollowedArtists());
+ipcMain.handle('store:followArtist', (_event, artist: FollowedArtist) => store.followArtist(artist));
+ipcMain.handle('store:unfollowArtist', (_event, artistId: string) => store.unfollowArtist(artistId));
+ipcMain.handle('store:isArtistFollowed', (_event, artistId: string) => store.isArtistFollowed(artistId));
+ipcMain.handle('store:toggleFollowArtist', (_event, artist: FollowedArtist) => store.toggleFollowArtist(artist));
 
 // Discord Webhook & Sharing IPC
 ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Track; currentTime?: number; duration?: number; webhookUrl?: string; cardPng?: string; room?: string }) => {

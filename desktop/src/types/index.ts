@@ -12,6 +12,8 @@ export interface Track {
   url?: string;
   streamUrl?: string;
   lyrics?: string;
+  isVideo?: boolean;
+  source?: 'pick' | 'radio';
 }
 
 export type PlaybackStatus = 'playing' | 'paused' | 'stopped';
@@ -45,4 +47,11 @@ export interface AppSettings {
   shuffle: boolean;
   /** Birlikte Dinle odasinda gorunecek kullanici adi (partide gosterilir) */
   discordDisplayName?: string;
+}
+
+export interface FollowedArtist {
+  id: string;
+  name: string;
+  thumbnail: string;
+  followedAt?: number;
 }

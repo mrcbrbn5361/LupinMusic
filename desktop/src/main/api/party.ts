@@ -143,6 +143,10 @@ export class PartyService {
   public async join(room: string): Promise<boolean> {
     const code = String(room || '').toLowerCase();
     if (!/^[a-z0-9]{6,20}$/i.test(code)) return false;
+    if (this.role === 'host' && this.room === code) {
+      console.warn(`[Party] Kendi odasına katılma engellendi: room=${code}`);
+      return false;
+    }
     this.stopTimers();
     this.room = code;
     this.role = 'follower';
