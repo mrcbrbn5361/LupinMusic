@@ -657,12 +657,16 @@ ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Tra
     // 0) VARSAYILAN YOL: kart relay'i. Webhook URL'si sunucuda kalir;
     //    kullanici hicbir sey yapmadan calisir (Ayarlar'daki URL sadece
     //    baska bir kanala gondermek icin gecerli bir gecersdirme).
+    //    Relay yalnizca CANLI odaya bagli kartlari kabul eder (403 = spam
+    //    onleme); uygulama her zaman oda + parca id'sini gonderir.
     if (cardPng) {
       try {
         const relayRes = await fetch(`${PARTY_RELAY}/api/card`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            room: room || undefined,
+            trackId: track.id,
             username: 'Lupin Music • Birlikte Dinle',
             avatarUrl: logoUrl,
             content: `🎧 **Birlikte Dinle:** ${partyUrl}\n🚀 **Lupin Uygulamasında Aç:** ${playUrl}`,
@@ -677,6 +681,18 @@ ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Tra
         });
         if (relayRes.ok) return { success: true, via: 'relay' };
         const relayErr = await relayRes.text().catch(() => '');
+        try {
+          const parsed = JSON.parse(relayErr);
+          // Relay'in webhook'u gecersizse (silinmis) sahibi uyarsin diye
+          // acik hata dondurulur; metin yedegine dusulmez.
+          if (parsed && parsed.code === 'webhook_invalid') {
+            console.warn('[BirlikteDinle] Relay webhook gecersiz (silinmis olabilir).');
+            return { success: false, error: 'Paylaşılan kanal şu an kapalı (yöneticiye bildir).', via: 'relay' };
+          }
+          if (relayRes.status === 403) {
+            console.warn('[BirlikteDinle] Relay reddetti:', parsed?.error);
+          }
+        } catch {}
         console.warn('[BirlikteDinle] Relay kart gonderimi basarisiz:', relayRes.status, relayErr.slice(0, 160));
       } catch (e: any) {
         console.warn('[BirlikteDinle] Relay erisilemiyor:', e?.message);
