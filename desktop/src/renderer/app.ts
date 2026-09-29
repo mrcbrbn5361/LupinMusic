@@ -129,6 +129,10 @@ const lyricsManager = new LyricsManager({
     // Çekmece açılacağı an sıranın kapalı olmasını çift dikiş garantiye al
     queueDrawer?.classList.remove('open');
     btnToggleQueue?.classList.remove('active');
+  },
+  onClose: () => {
+    lyricsDrawer?.classList.remove('open');
+    btnToggleLyrics?.classList.remove('active');
   }
 });
 
@@ -906,28 +910,42 @@ btnLike.addEventListener('click', async () => {
 });
 
 // Right Drawers (Queue & Lyrics) Toggles & Mutual Exclusion Discipline
-btnToggleQueue.addEventListener('click', () => {
-  const isCurrentlyOpen = queueDrawer.classList.contains('open');
+btnToggleQueue?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const isCurrentlyOpen = queueDrawer?.classList.contains('open') || btnToggleQueue?.classList.contains('active');
   closeAllRightDrawers();
   if (!isCurrentlyOpen) {
-    queueDrawer.classList.add('open');
-    btnToggleQueue.classList.add('active');
+    queueDrawer?.classList.add('open');
+    btnToggleQueue?.classList.add('active');
     renderQueueList();
   }
 });
-btnCloseQueue.addEventListener('click', () => {
+
+btnCloseQueue?.addEventListener('click', (e) => {
+  e.stopPropagation();
   closeAllRightDrawers();
 });
 
-btnToggleLyrics?.addEventListener('click', () => {
-  const isCurrentlyOpen = lyricsManager.isOpen() || lyricsDrawer.classList.contains('open');
+btnToggleLyrics?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const isCurrentlyOpen = lyricsDrawer?.classList.contains('open') || btnToggleLyrics?.classList.contains('active') || (lyricsManager && lyricsManager.isOpen());
   closeAllRightDrawers();
   if (!isCurrentlyOpen) {
-    lyricsManager.open();
+    lyricsManager?.open();
   }
 });
-btnCloseLyrics?.addEventListener('click', () => {
+
+btnCloseLyrics?.addEventListener('click', (e) => {
+  e.stopPropagation();
   closeAllRightDrawers();
+});
+
+// Çekmece içi tüm kapatma (çarpı) butonlarını garantiye al
+document.querySelectorAll('.queue-drawer .close, .lyrics-drawer .close, .close-btn').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeAllRightDrawers();
+  });
 });
 
 function renderQueueList() {

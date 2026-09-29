@@ -127,7 +127,8 @@ export class LyricsManager {
     // Not: toggleBtn tıklama ve karşılıklı dışlama yönetimi app.ts içindeki closeAllRightDrawers() merkezi fonksiyonuna devredilmiştir.
 
     if (this.closeBtn) {
-      this.closeBtn.addEventListener('click', () => {
+      this.closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         this.close();
       });
     }
