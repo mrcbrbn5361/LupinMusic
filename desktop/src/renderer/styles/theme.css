@@ -41,6 +41,7 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  scrollbar-gutter: stable;
 }
 
 /* Custom Scrollbar */
@@ -318,7 +319,9 @@ body {
 .view-container {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px 32px 32px 32px;
+  scrollbar-gutter: stable;
 }
 
 .view-section-title {
@@ -448,12 +451,16 @@ body {
   z-index: 900;
 }
 
-/* Left Track Info */
+/* Left Track Info - Kilitli Statik Genislik */
 .player-left {
   display: flex;
   align-items: center;
   gap: 14px;
   width: 320px;
+  min-width: 320px;
+  max-width: 320px;
+  flex: 0 0 320px;
+  overflow: hidden;
 }
 
 .player-thumb-wrap {
@@ -516,14 +523,16 @@ body {
   filter: drop-shadow(0 0 8px var(--accent-pink));
 }
 
-/* Center Controls */
+/* Center Controls - Esnek ve Tam Ortalanmis */
 .player-center {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
   flex: 1;
-  max-width: 600px;
+  min-width: 0;
+  max-width: 650px;
+  margin: 0 auto;
 }
 
 .controls-row {
@@ -627,16 +636,18 @@ body {
   transform: translateY(-50%) scale(1);
 }
 
-/* Right Controls (Volume & Visualizer & Queue) - Mühürlü Genişlik */
+/* Right Controls (Volume & Visualizer & Queue) - Kilitli Statik Genislik */
 .player-right {
   display: flex;
   align-items: center;
   gap: 12px;
-  width: 340px;
-  min-width: 340px;
-  max-width: 340px;
+  width: 320px;
+  min-width: 320px;
+  max-width: 320px;
+  flex: 0 0 320px;
   justify-content: flex-end;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .player-right .ctrl-btn {
@@ -800,30 +811,27 @@ body {
 
 /* Queue Drawer (Overlay Slide Panel - Sifir Layout Shift) */
 .queue-drawer {
-  position: absolute;
-  top: 0;
+  position: fixed;
+  top: 38px;
   right: 0;
-  bottom: 0;
+  bottom: 88px;
   width: 360px;
   max-width: 90vw;
-  height: 100%;
   background: rgba(18, 6, 36, 0.96);
   backdrop-filter: var(--glass-blur);
   border-left: 1px solid var(--border-glow);
   box-shadow: -12px 0 35px rgba(0, 0, 0, 0.85);
   display: flex;
   flex-direction: column;
-  z-index: 850;
+  z-index: 1000;
   transform: translateX(100%);
-  visibility: hidden;
   pointer-events: none;
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.3s;
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   padding: 20px;
 }
 
 .queue-drawer.open {
   transform: translateX(0);
-  visibility: visible;
   pointer-events: auto;
 }
 
@@ -903,30 +911,27 @@ body {
 
 /* Lyrics Drawer (Overlay Slide Panel - Sifir Layout Shift) */
 .lyrics-drawer {
-  position: absolute;
-  top: 0;
+  position: fixed;
+  top: 38px;
   right: 0;
-  bottom: 0;
+  bottom: 88px;
   width: 400px;
   max-width: 90vw;
-  height: 100%;
   background: rgba(14, 5, 28, 0.96);
   backdrop-filter: var(--glass-blur);
   border-left: 1px solid var(--border-glow);
   box-shadow: -12px 0 40px rgba(0, 0, 0, 0.88);
   display: flex;
   flex-direction: column;
-  z-index: 850;
+  z-index: 1000;
   transform: translateX(100%);
-  visibility: hidden;
   pointer-events: none;
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.3s;
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   padding: 20px 24px;
 }
 
 .lyrics-drawer.open {
   transform: translateX(0);
-  visibility: visible;
   pointer-events: auto;
 }
 
