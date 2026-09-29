@@ -18,8 +18,8 @@ const api = {
 
   // Audio Engine Playback Controls
   playTrack: (track: Track) => ipcRenderer.invoke('player:play', track),
-  pause: () => ipcRenderer.invoke('player:pause'),
-  resume: () => ipcRenderer.invoke('player:resume'),
+  pause: (currentTime?: number) => ipcRenderer.invoke('player:pause', currentTime),
+  resume: (currentTime?: number) => ipcRenderer.invoke('player:resume', currentTime),
   seek: (seconds: number) => ipcRenderer.invoke('player:seek', seconds),
   setVolume: (val: number) => ipcRenderer.invoke('player:setVolume', val),
 

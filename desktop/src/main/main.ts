@@ -482,10 +482,10 @@ app.whenReady().then(async () => {
       audioEngine.resume();
       // Discord presence'i aninda yansit: poll'a birakmak isAd/bot duraginda
       // "hâlâ çalıyor" goruntusunu birakiyordu.
-      if (currentTrack) discordRpc.update(currentTrack, 'playing');
+      if (currentTrack) discordRpc.update(currentTrack, 'playing', partyLocal.position || 0);
     } else if (action === 'pause') {
       audioEngine.pause();
-      if (currentTrack) discordRpc.update(currentTrack, 'paused');
+      if (currentTrack) discordRpc.update(currentTrack, 'paused', partyLocal.position || 0);
     } else if (action === 'volume' && typeof payload === 'number') audioEngine.setVolume(payload);
     else if (action === 'seek' && typeof payload === 'number') audioEngine.seek(payload);
     else if (mainWindow && !mainWindow.isDestroyed()) {
@@ -669,15 +669,15 @@ ipcMain.handle('player:play', async (_event, track: Track) => {
   return ok;
 });
 
-ipcMain.handle('player:pause', async () => {
-  const pos = partyLocal.position || 0;
+ipcMain.handle('player:pause', async (_event, clientTime?: number) => {
+  const pos = typeof clientTime === 'number' && !isNaN(clientTime) ? clientTime : (partyLocal.position || 0);
   if (currentTrack) discordRpc.update(currentTrack, 'paused', pos);
   await audioEngine.pause();
   return true;
 });
 
-ipcMain.handle('player:resume', async () => {
-  const pos = partyLocal.position || 0;
+ipcMain.handle('player:resume', async (_event, clientTime?: number) => {
+  const pos = typeof clientTime === 'number' && !isNaN(clientTime) ? clientTime : (partyLocal.position || 0);
   if (currentTrack) discordRpc.update(currentTrack, 'playing', pos);
   await audioEngine.resume();
   return true;

@@ -454,12 +454,12 @@ async function togglePlayPause() {
     isPlaying = false;
     userPaused = true;
     updatePlayPauseUI();
-    window.api?.pause?.().catch(() => {});
+    window.api?.pause?.(currentTime || 0).catch(() => {});
   } else {
     isPlaying = true;
     userPaused = false;
     updatePlayPauseUI();
-    window.api?.resume?.().catch(() => {});
+    window.api?.resume?.(currentTime || 0).catch(() => {});
   }
 }
 

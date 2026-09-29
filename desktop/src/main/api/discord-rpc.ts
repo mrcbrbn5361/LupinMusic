@@ -297,9 +297,14 @@ export class DiscordRpcManager {
           start: startTimestamp,
           end: endTimestamp
         };
+        activityPayload.startTimestamp = startTimestamp;
+        activityPayload.endTimestamp = endTimestamp;
       } else {
-        // Duraklatıldığında Discord'un canlı geri sayımı ve 0'dan sonra sonsuz yükselen saati sıfırlanır
-        activityPayload.timestamps = {};
+        // Duraklatıldığında Discord'un kendi kendine saymaya devam etmesini engellemek için
+        // activityPayload içerisinden startTimestamp, endTimestamp ve timestamps değerlerini açıkça sil (delete)
+        delete activityPayload.timestamps;
+        delete activityPayload.startTimestamp;
+        delete activityPayload.endTimestamp;
       }
 
       activityPayload.assets = {
@@ -316,6 +321,12 @@ export class DiscordRpcManager {
       delete activityPayload.partyId;
       delete activityPayload.joinSecret;
 
+      if (!isPlaying) {
+        delete activityPayload.timestamps;
+        delete activityPayload.startTimestamp;
+        delete activityPayload.endTimestamp;
+      }
+
       // discord-rpc paketinin varsayılan setActivity() sarmalayıcısı type'ı elediğinden
       // doğrudan IPC request('SET_ACTIVITY') ile type: 2 (Listening to) gönderilir.
       const sendPromise = (this.rpc as any).request
@@ -323,7 +334,8 @@ export class DiscordRpcManager {
         : this.rpc.setActivity({
             details: safeTitle,
             state: safeState,
-            timestamps: activityPayload.timestamps,
+            startTimestamp: isPlaying ? startTimestamp : undefined,
+            endTimestamp: isPlaying ? endTimestamp : undefined,
             largeImageKey: largeImage,
             largeImageText: activityPayload.assets.large_text,
             smallImageKey: defaultLogo,
