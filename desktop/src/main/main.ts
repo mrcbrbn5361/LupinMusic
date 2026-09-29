@@ -6,6 +6,7 @@ import { InnerTubeService } from './api/innertube.js';
 import { AudioEngine } from './api/audio-engine.js';
 import { AppStore } from './store/index.js';
 import { PartyService } from './api/party.js';
+import { getAnonymizedDeviceId } from './utils/deviceInfo.js';
 import type { Track, PlaybackStatus, AppSettings, FollowedArtist } from '../types/index.js';
 
 // Marka adi Electron varsayilani (package.json name) yerine urun adi olur;
@@ -112,19 +113,44 @@ function handleDeepLink(rawUrl: string): void {
     const parsed = new URL(clean);
     const videoId = parsed.searchParams.get('id') || parsed.searchParams.get('v') || parsed.pathname.replace(/^\//, '');
     const seekTime = Number(parsed.searchParams.get('t')) || 0;
-    const room = (parsed.searchParams.get('room') || parsed.searchParams.get('partyId') || parsed.searchParams.get('joinSecret') || '').toLowerCase();
+    let room = (parsed.searchParams.get('room') || parsed.searchParams.get('partyId') || parsed.searchParams.get('joinSecret') || '').toLowerCase();
+    let targetDeviceId = parsed.searchParams.get('device') || parsed.searchParams.get('deviceId') || parsed.searchParams.get('d') || '';
+
+    // room_id|device_id formatını çöz
+    if (room.includes('|')) {
+      const parts = room.split('|');
+      room = parts[0].trim();
+      if (!targetDeviceId && parts[1]) {
+        targetDeviceId = parts[1].trim();
+      }
+    }
+
     if (!videoId && !room) return;
+
+    // Cihaz parmak izi koruması: Kendi açtığı partiye katılamaz
+    const localDeviceId = getAnonymizedDeviceId().toLowerCase();
+    if (targetDeviceId && targetDeviceId.toLowerCase() === localDeviceId) {
+      console.warn(`[Party] Kendi partisine (cihazına) katılma engellendi: deviceId=${targetDeviceId}`);
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
+        mainWindow.webContents.send('bot:remote-control', 'toast', { message: 'Kendi partinize (cihazınıza) katılamazsınız!' });
+      }
+      return;
+    }
+
     // Parti odasi: host'a katil (senkron room.state -> renderer hizalama)
     if (room && /^[a-z0-9]{6,20}$/.test(room)) {
       if (party.getRole() === 'host' && party.getRoom() === room) {
         console.log(`[Party] Kendi odasına katılma engellendi: room=${room}`);
         if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
-          mainWindow.webContents.send('bot:remote-control', 'toast', { message: 'Zaten kendi odandasın' });
+          mainWindow.webContents.send('bot:remote-control', 'toast', { message: 'Kendi partinize (cihazınıza) katılamazsınız!' });
         }
       } else {
         party.setName(store.getSettings().discordDisplayName || 'Misafir');
-        party.join(room).then((ok) => {
+        party.join(room, targetDeviceId).then((ok) => {
           console.log(`[Party] deep link join room=${room} ok=${ok}`);
+          if (!ok && mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
+            mainWindow.webContents.send('bot:remote-control', 'toast', { message: 'Kendi partinize (cihazınıza) katılamazsınız!' });
+          }
         }).catch(() => {});
       }
     }
@@ -536,30 +562,64 @@ ipcMain.handle('party:host', async (_event, payload: { room?: string; name?: str
   if (payload?.name) party.setName(payload.name);
   const relayOk = await party.host(payload?.room);
   const room = party.getRoom();
+  const deviceId = getAnonymizedDeviceId();
   return {
     success: true,
     relayOk,
     room,
+    deviceId,
     role: 'host',
-    link: room ? `https://lupinmusic.vercel.app/party?room=${room}` : ''
+    link: room ? `https://lupinmusic.vercel.app/party?room=${room}&d=${deviceId}` : ''
   };
 });
 
-ipcMain.handle('party:join', async (_event, payload: { room?: string; partyId?: string; joinSecret?: string; name?: string }) => {
-  const targetRoom = String(payload?.room || payload?.partyId || payload?.joinSecret || '').trim().toLowerCase();
+ipcMain.handle('party:join', async (_event, payload: { room?: string; partyId?: string; joinSecret?: string; deviceId?: string; name?: string }) => {
+  let targetRoom = String(payload?.room || payload?.partyId || payload?.joinSecret || '').trim().toLowerCase();
+  let targetDeviceId = payload?.deviceId ? String(payload.deviceId).trim().toLowerCase() : '';
+
+  if (targetRoom.includes('|')) {
+    const parts = targetRoom.split('|');
+    targetRoom = parts[0].trim();
+    if (!targetDeviceId && parts[1]) {
+      targetDeviceId = parts[1].trim().toLowerCase();
+    }
+  }
+
+  const localDeviceId = getAnonymizedDeviceId().toLowerCase();
+  if (targetDeviceId && targetDeviceId === localDeviceId) {
+    console.warn(`[Party] Kendi partisine (cihazına) katılma engellendi: deviceId=${targetDeviceId}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bot:remote-control', 'toast', { message: 'Kendi partinize (cihazınıza) katılamazsınız!' });
+    }
+    return { success: false, isOwnDevice: true, error: 'Kendi partinize (cihazınıza) katılamazsınız!', role: party.getRole(), room: party.getRoom() };
+  }
+
   if (party.getRole() === 'host' && party.getRoom() === targetRoom) {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bot:remote-control', 'toast', { message: 'Zaten kendi odandasın' });
+      mainWindow.webContents.send('bot:remote-control', 'toast', { message: 'Kendi partinize (cihazınıza) katılamazsınız!' });
     }
-    return { success: false, isOwnRoom: true, error: 'Zaten kendi odandasın', role: party.getRole(), room: party.getRoom() };
+    return { success: false, isOwnRoom: true, error: 'Kendi partinize (cihazınıza) katılamazsınız!', role: party.getRole(), room: party.getRoom() };
   }
   if (payload?.name) party.setName(payload.name);
-  const ok = await party.join(targetRoom);
+  const ok = await party.join(targetRoom, targetDeviceId);
+  if (!ok && (targetDeviceId === localDeviceId || (party.getRole() === 'host' && party.getRoom() === targetRoom))) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bot:remote-control', 'toast', { message: 'Kendi partinize (cihazınıza) katılamazsınız!' });
+    }
+  }
   return { success: ok, role: party.getRole(), room: party.getRoom() };
 });
 
 ipcMain.handle('party:leave', async () => {
-  await party.leave('manual');
+  if (party.getRole() === 'host') {
+    await party.endParty();
+  } else {
+    await party.leaveParty();
+  }
+  if (currentTrack) {
+    const isPlaying = partyLocal.playing;
+    discordRpc.update(currentTrack, isPlaying ? 'playing' : 'paused', partyLocal.position || 0);
+  }
   return { success: true, role: party.getRole() };
 });
 
@@ -689,8 +749,9 @@ ipcMain.handle('discord:sendWebhookInvite', async (_event, payload: { track: Tra
     const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
     // Lupin Neon Pink: 0xec4899 (15485081)
     const embedColor = 0xec4899;
+    const deviceId = getAnonymizedDeviceId();
     const partyUrl = room
-      ? `https://lupinmusic.vercel.app/party?room=${room}`
+      ? `https://lupinmusic.vercel.app/party?room=${room}&d=${deviceId}`
       : `https://lupinmusic.vercel.app/party?id=${track.id}&t=${Math.floor(currentTime)}`;
     const playUrl = `https://lupinmusic.vercel.app/play?id=${track.id}`;
     const logoUrl = 'https://raw.githubusercontent.com/mrcbrbn5361/LupinMusic/main/desktop/assets/icon.png';

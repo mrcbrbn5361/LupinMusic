@@ -73,9 +73,9 @@ const api = {
     ipcRenderer.invoke('clipboard:writeText', text),
 
   // Birlikte Dinle (party)
-  hostParty: (payload: { room?: string; name?: string }): Promise<{ success: boolean; relayOk: boolean; room: string; role: string; link: string }> =>
+  hostParty: (payload: { room?: string; name?: string }): Promise<{ success: boolean; relayOk: boolean; room: string; deviceId?: string; role: string; link: string }> =>
     ipcRenderer.invoke('party:host', payload),
-  joinParty: (payload: { room: string; name?: string }): Promise<{ success: boolean; role: string; room: string }> =>
+  joinParty: (payload: { room: string; deviceId?: string; name?: string }): Promise<{ success: boolean; role: string; room: string; isOwnDevice?: boolean; isOwnRoom?: boolean; error?: string }> =>
     ipcRenderer.invoke('party:join', payload),
   leaveParty: (): Promise<{ success: boolean; role: string }> => ipcRenderer.invoke('party:leave'),
   getPartyStatus: (): Promise<{ role: string; room: string }> => ipcRenderer.invoke('party:status'),

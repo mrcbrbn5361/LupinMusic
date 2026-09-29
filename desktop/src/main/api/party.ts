@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { getAnonymizedDeviceId } from '../utils/deviceInfo.js';
 
 /**
  * Lupin Music — Birlikte Dinle (party) servisi.
@@ -140,9 +141,28 @@ export class PartyService {
   }
 
   /** Odaya katil (follower). Basariliysa true. */
-  public async join(room: string): Promise<boolean> {
-    const code = String(room || '').toLowerCase();
+  public async join(room: string, hostDeviceId?: string): Promise<boolean> {
+    let code = String(room || '').trim().toLowerCase();
+    let devId = hostDeviceId ? String(hostDeviceId).trim().toLowerCase() : '';
+
+    // room_id|device_id formatını destekle
+    if (code.includes('|')) {
+      const parts = code.split('|');
+      code = parts[0].trim();
+      if (!devId && parts[1]) {
+        devId = parts[1].trim();
+      }
+    }
+
     if (!/^[a-z0-9]{6,20}$/i.test(code)) return false;
+
+    // Kendi cihazından açılmış partiye katılmayı engelle (Device Fingerprint)
+    const localDeviceId = getAnonymizedDeviceId().toLowerCase();
+    if (devId && devId === localDeviceId) {
+      console.warn(`[Party] Kendi cihazının partisine katılma engellendi: deviceId=${devId}`);
+      return false;
+    }
+
     if (this.role === 'host' && this.room === code) {
       console.warn(`[Party] Kendi odasına katılma engellendi: room=${code}`);
       return false;
@@ -175,6 +195,16 @@ export class PartyService {
     if (state.closed) { this.onClosed?.(); this.leaveLocal(); return; }
     if (state.updatedAt && Date.now() - state.updatedAt > 45000) { this.onClosed?.(); this.leaveLocal(); return; }
     this.onFollow?.(state);
+  }
+
+  /** Partiyi tamamen sonlandır (host odasını kapatır). */
+  public async endParty(): Promise<void> {
+    await this.leave('closed');
+  }
+
+  /** Partiden ayrıl (katılımcı veya host yerel olarak ayrılır). */
+  public async leaveParty(): Promise<void> {
+    await this.leave('manual');
   }
 
   /** Katilimci elle bir sey yapti (parca degistirdi): otomatik ayril. */

@@ -1386,6 +1386,16 @@ function queueInsertNext(track: Track): void {
 
 if (btnDiscordInvite) {
   btnDiscordInvite.addEventListener('click', async () => {
+    // TOGGLE OFF: Eğer parti zaten aktifse (host veya follower), partiyi kapat/ayrıl
+    if (partyRole !== 'off') {
+      await window.api?.leaveParty?.();
+      partyRole = 'off';
+      partyRoom = '';
+      updatePartyBadge();
+      showToast('🚪 Birlikte dinleme odası kapatıldı.');
+      return;
+    }
+
     if (!currentTrack) {
       showToast('⚠️ Şu anda çalan bir şarkı yok!');
       return;
@@ -1400,14 +1410,18 @@ if (btnDiscordInvite) {
       updatePartyBadge();
     }
     const roomLink = hostRes?.link || '';
+    const deviceId = hostRes?.deviceId || '';
 
     const cur = currentTime || 0;
     const dur = currentDuration || 0;
     const fmt = (s: number) => formatTime(s);
 
-    // Davet linki: oda kodu varsa GERCEK senkron olur (katilimci host'u takip eder)
-    const shareUrl = roomLink || `https://lupinmusic.vercel.app/party?id=${currentTrack.id}&t=${Math.floor(cur)}`;
-    const inviteMarkdown = `🎧 **Lupin Music • Birlikte Dinleme**\n🎵 **${currentTrack.title}** — *${currentTrack.artist}*\n⏳ Konum: \`${fmt(cur)} / ${fmt(dur)}\`\n✨ **Katıl:** ${shareUrl}\n🔗 Uygulama içi: \`lupin://party${roomLink ? `?room=${partyRoom}&id=${currentTrack.id}&t=${Math.floor(cur)}` : `?id=${currentTrack.id}&t=${Math.floor(cur)}`}\``;
+    // Davet linki: oda kodu ve cihaz parmak izi ile güvenli derin link (self-join korumalı)
+    const deepLinkRoomParam = deviceId ? `${partyRoom}|${deviceId}` : partyRoom;
+    const shareUrl = roomLink || (partyRoom
+      ? `https://lupinmusic.vercel.app/party?room=${partyRoom}${deviceId ? `&d=${deviceId}` : ''}`
+      : `https://lupinmusic.vercel.app/party?id=${currentTrack.id}&t=${Math.floor(cur)}`);
+    const inviteMarkdown = `🎧 **Lupin Music • Birlikte Dinleme**\n🎵 **${currentTrack.title}** — *${currentTrack.artist}*\n⏳ Konum: \`${fmt(cur)} / ${fmt(dur)}\`\n✨ **Katıl:** ${shareUrl}\n🔗 Uygulama içi: \`lupin://party${partyRoom ? `?room=${deepLinkRoomParam}&id=${currentTrack.id}&t=${Math.floor(cur)}` : `?id=${currentTrack.id}&t=${Math.floor(cur)}`}\``;
 
     try {
       await window.api?.copyToClipboard(inviteMarkdown);
