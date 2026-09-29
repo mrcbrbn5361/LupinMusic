@@ -224,7 +224,7 @@ export class DiscordRpcManager {
     }, wait);
   }
 
-  private sendActivity(track: Track | null, status: PlaybackStatus, currentTime: number = 0): void {
+  private async sendActivity(track: Track | null, status: PlaybackStatus, currentTime: number = 0): Promise<void> {
     if (!this.rpc || !this.isConnected || !track || status === 'stopped') return;
 
     try {
@@ -284,30 +284,7 @@ export class DiscordRpcManager {
         { label: '💜 Discord Sunucusu', url: 'https://discord.gg/Rma8w8JrQH' }
       ];
 
-      const activityPayload: any = {
-        type: 2, // 2 = Listening to -> Discord profilinde "Lupin Music Dinliyor" olarak görünür
-        details: safeTitle,
-        state: safeState,
-        instance: false,
-        buttons
-      };
-
-      if (isPlaying && (startTimestamp || endTimestamp)) {
-        activityPayload.timestamps = {
-          start: startTimestamp,
-          end: endTimestamp
-        };
-        activityPayload.startTimestamp = startTimestamp;
-        activityPayload.endTimestamp = endTimestamp;
-      } else {
-        // Duraklatıldığında Discord'un kendi kendine saymaya devam etmesini engellemek için
-        // activityPayload içerisinden startTimestamp, endTimestamp ve timestamps değerlerini açıkça sil (delete)
-        delete activityPayload.timestamps;
-        delete activityPayload.startTimestamp;
-        delete activityPayload.endTimestamp;
-      }
-
-      activityPayload.assets = {
+      const assets = {
         large_image: largeImage,
         large_text: `${(album || track.title || 'Lupin Music').slice(0, 60)} • github.com/mrcbrbn5361/LupinMusic`.slice(0, 128),
         small_image: defaultLogo,
@@ -315,46 +292,81 @@ export class DiscordRpcManager {
       };
 
       const trackId = track.id;
-      // Discord RPC kuralı: Butonlar varken asla secrets/party gönderilemez.
-      delete activityPayload.secrets;
-      delete activityPayload.party;
-      delete activityPayload.partyId;
-      delete activityPayload.joinSecret;
 
       if (!isPlaying) {
-        delete activityPayload.timestamps;
-        delete activityPayload.startTimestamp;
-        delete activityPayload.endTimestamp;
-      }
+        // 4) Önbellek Temizliği (Clear Cache): Discord'un inatçı sayacını kırmak için eskisini temizle
+        try {
+          await this.rpc.clearActivity();
+        } catch {}
 
-      // discord-rpc paketinin varsayılan setActivity() sarmalayıcısı type'ı elediğinden
-      // doğrudan IPC request('SET_ACTIVITY') ile type: 2 (Listening to) gönderilir.
-      const sendPromise = (this.rpc as any).request
-        ? (this.rpc as any).request('SET_ACTIVITY', { pid: process.pid, activity: activityPayload })
-        : this.rpc.setActivity({
-            details: safeTitle,
-            state: safeState,
-            startTimestamp: isPlaying ? startTimestamp : undefined,
-            endTimestamp: isPlaying ? endTimestamp : undefined,
-            largeImageKey: largeImage,
-            largeImageText: activityPayload.assets.large_text,
-            smallImageKey: defaultLogo,
-            smallImageText: activityPayload.assets.small_text,
-            instance: false,
-            buttons
-          });
+        // 3) Kök Çözüm (Temiz Obje): startTimestamp veya endTimestamp KESİNLİKLE İÇERMEYEN sıfır obje
+        const pauseActivity: any = {
+          type: 2, // 2 = Listening to -> Discord profilinde "Lupin Music Dinliyor"
+          details: safeTitle,
+          state: safeState,
+          assets,
+          buttons,
+          instance: true
+        };
 
-      sendPromise.then(() => {
+        const sendPromise = (this.rpc as any).request
+          ? (this.rpc as any).request('SET_ACTIVITY', { pid: process.pid, activity: pauseActivity })
+          : this.rpc.setActivity({
+              details: safeTitle,
+              state: safeState,
+              largeImageKey: largeImage,
+              largeImageText: assets.large_text,
+              smallImageKey: defaultLogo,
+              smallImageText: assets.small_text,
+              instance: true,
+              buttons
+            });
+
+        await sendPromise;
+        this.lastSentTrackId = trackId;
+        this.lastSentStatus = status;
+        this.lastSentCurrentTime = currentTime;
+        this.lastSentDuration = track.duration || 0;
+        console.log(`[DiscordRPC] ⏸️ Pause activity set (clean cache): "${safeTitle}" - ${safeState}`);
+      } else {
+        // Çalma durumu: Canlı sayaç için startTimestamp ve endTimestamp ilet
+        const playActivity: any = {
+          type: 2, // 2 = Listening to -> Discord profilinde "Lupin Music Dinliyor"
+          details: safeTitle,
+          state: safeState,
+          timestamps: (startTimestamp || endTimestamp) ? {
+            ...(startTimestamp ? { start: startTimestamp } : {}),
+            ...(endTimestamp ? { end: endTimestamp } : {})
+          } : undefined,
+          assets,
+          buttons,
+          instance: false
+        };
+
+        const sendPromise = (this.rpc as any).request
+          ? (this.rpc as any).request('SET_ACTIVITY', { pid: process.pid, activity: playActivity })
+          : this.rpc.setActivity({
+              details: safeTitle,
+              state: safeState,
+              startTimestamp,
+              endTimestamp,
+              largeImageKey: largeImage,
+              largeImageText: assets.large_text,
+              smallImageKey: defaultLogo,
+              smallImageText: assets.small_text,
+              instance: false,
+              buttons
+            });
+
+        await sendPromise;
         this.lastSentTrackId = trackId;
         this.lastSentStatus = status;
         this.lastSentCurrentTime = currentTime;
         this.lastSentDuration = track.duration || 0;
         console.log(`[DiscordRPC] 🎵 Activity updated (Listening to): "${safeTitle}" - ${safeState} (${status})`);
-      }).catch((e: any) => {
-        console.warn('[DiscordRPC] setActivity failed:', e?.message || e);
-      });
+      }
     } catch (e: any) {
-      console.debug('[DiscordRPC] Activity update error:', e?.message || e);
+      console.warn('[DiscordRPC] setActivity failed:', e?.message || e);
     }
   }
 
